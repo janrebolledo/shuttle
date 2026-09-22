@@ -111,3 +111,10 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Cloudflare and generated browser bundle
+.wrangler/
+.dev.vars*
+.env.*
+!.env.example
+public/build/

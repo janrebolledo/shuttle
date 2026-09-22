@@ -1,1 +1,47 @@
-# shuttle
+# Shuttle
+
+HTML/CSS implementation of [Figma frame 48:2](https://www.figma.com/design/G1kXTZzdupDlI54a7lwSX7/Shuttle-Tracker-App?node-id=48-2), with Bun tooling, Hono on Cloudflare Workers, Motion digit transitions, and [Lisse](https://corne.rs/) continuous corners.
+
+## Run locally
+
+```sh
+bun install
+cp .env.example .env # Only if you don't already have .env
+bun run types
+bun run dev
+```
+
+Open http://localhost:8787. After changing browser TypeScript, run `bun run build` and refresh. HTML/CSS changes are served directly.
+
+## Apple Maps
+
+Paste your Apple Maps **browser token** into `APPLE_MAPKIT_TOKEN` in `.env`, then restart the development server. Wrangler loads `.env` locally. With no token, the map area remains blank. With a token, MapKit initializes a map near Cal Poly Pomona. Authorization and appearance with a real token still need validation.
+
+The token is delivered to the browser via `/api/mapkit-token`, as required by MapKit JS. Use an origin-restricted browser token; never supply an Apple private signing key. For production, configure it with `bunx wrangler secret put APPLE_MAPKIT_TOKEN` before deploying.
+
+## Scope
+
+Live arrivals use opt-in browser location sharing while the tab is open. After repeated accurate readings show sustained movement from SSB or The Current, the browser shares an ephemeral session's latest position with a single Durable Object. The server combines agreeing fresh reports, publishes one shuttle estimate, and deletes reports within 75 seconds after updates stop. Stopping sharing deletes the active report immediately. The map marker and ETA cards update for both destinations; when there are no fresh reports, the page shows “Live ETA unavailable.”
+
+The route model uses the provided SSB coordinate (`34.05847, -117.81793`) and the existing The Current map pin (`34.0644634, -117.8036599`). It projects readings onto the segment between those stops, with a 400 m corridor and a provisional 1.3 road-distance factor for ETA ranges. This is a first-pass approximation, not a surveyed route trace. It needs calibration against real rides in both directions. Turnaround waits are modeled as 1–3 minutes at either endpoint. Service hours and breaks are not configured, so estimates appear only while rider updates are fresh; the app does not imply service is running when updates are absent.
+
+The app remains mostly vanilla TypeScript; only the alert sheet uses a React island. Tapping one of its four service alert choices posts to `/api/alerts`; the Worker validates it and writes it to logs, without durable storage. The feedback sheet uses filled Apple SF Symbols exported as SVGs from [sfsymbols-svg](https://github.com/brendanballon/sfsymbols-svg); Apple licenses these symbols for developing applications on Apple-branded products. Silk 0.10.1 is publicly installable and its unlayered styles are bundled into `/build/main.css`. The sheet declares `license="non-commercial"` based on the app’s confirmed exclusively non-commercial use. Commercial use requires purchasing a [Silk commercial license](https://silkhq.com/terms) and changing that declaration. Location requires HTTPS or localhost.
+
+Counts roll once on page load using Motion and Emil's design engineering guidance: a 280 ms ease-out, fixed digit widths, stationary units, and no movement with reduced motion enabled. Live arrival values update from the shared estimate and do not use simulated countdowns.
+
+## Validate / deploy
+
+```sh
+bun run types
+bun run check
+bun run build
+bunx wrangler deploy --dry-run
+# When ready to publish:
+bun run deploy
+```
+
+GitHub Actions deploys `main` to Cloudflare after each push. Add the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` under **Settings → Secrets and variables → Actions**. Create a Cloudflare API token with the **Edit Cloudflare Workers** permission, scoped to the account that hosts this Worker. The workflow runs the type check and deploy build before publishing. The Worker is configured to use `shuttle.calpoly.place` as a custom domain; Cloudflare must host the `calpoly.place` zone in that account.
+
+Bun handles packages and the browser build; Cloudflare's Workers runtime runs the server. SVG icon assets are stored in `public/assets` so they do not depend on expiring URLs. Apple system fonts are used when available, with Helvetica Neue as fallback.
+
+The three inline navigation and signal SVGs retain their original icon geometry; their license notices are in `public/assets/icons/LICENSE.lucide`.

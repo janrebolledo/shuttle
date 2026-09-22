@@ -1,0 +1,28 @@
+{
+  "name": "shuttle",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/apple-mapkit-js": "^5.50.0",
+    "@types/bun": "^1.4.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.136.2"
+  },
+  "dependencies": {
+    "@lisse/core": "^0.7.2",
+    "@silk-hq/components": "0.10.1",
+    "hono": "^4.13.8",
+    "motion": "^13.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "scripts": {
+    "dev": "bun run build && wrangler dev --port 8787",
+    "build": "bun build src/client/main.ts --outdir public/build --target browser --minify",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "deploy": "bun run build && wrangler deploy"
+  }
+}

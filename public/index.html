@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Shuttle" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="description" content="Shuttle arrival preview for The Current." />
+    <title>Shuttle · The Current</title>
+    <link rel="stylesheet" href="/build/main.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/build/main.js"></script>
+  </head>
+  <body>
+    <main class="shuttle" aria-label="Shuttle arrival preview">
+      <section class="map-section" aria-label="Shuttle map">
+        <div id="map" aria-label="Apple Maps" hidden></div>
+        <div class="map-gradient" aria-hidden="true"></div>
+        <div class="map-toolbar">
+          <div class="map-context">
+            <div class="route-switcher" role="group" aria-label="Selected shuttle route">
+              <span>The Current</span>
+              <span class="icon icon--route" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" /></svg></span>
+              <span>Cal Poly</span>
+            </div>
+          </div>
+          <div id="alert-sheet-root"></div>
+        </div>
+      </section>
+      <section class="arrivals" aria-labelledby="destination">
+        <header class="destination">
+          <button class="page-indicator" type="button" aria-label="Show destination 2 of 2: Cal Poly Pomona" aria-controls="destination">
+            <i class="is-active" aria-hidden="true"></i><i aria-hidden="true"></i>
+          </button>
+          <p>next shuttle to:</p>
+          <h1 id="destination" aria-live="polite" aria-atomic="true">the current</h1>
+        </header>
+        <article class="arrival-card arrival-card--next" data-corner="24" aria-label="Next shuttle estimate">
+          <div class="arrival-heading">
+            <h2 id="next-range">—</h2>
+            <span class="icon icon--signal" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.247 7.761a6 6 0 0 1 0 8.478" /><path d="M19.075 4.933a10 10 0 0 1 0 14.134" /><path d="M4.925 19.067a10 10 0 0 1 0-14.134" /><path d="M7.753 16.239a6 6 0 0 1 0-8.478" /><circle cx="12" cy="12" r="2" /></svg></span>
+          </div>
+          <p class="arrival-detail"><span id="next-detail">Live ETA unavailable</span></p>
+        </article>
+        <article class="arrival-card arrival-card--scheduled" data-corner="24" aria-label="Following shuttle estimate">
+          <h2 id="following-range">—</h2>
+          <p class="arrival-detail" id="following-detail">Unavailable</p>
+        </article>
+      </section>
+      <section class="sharing" aria-label="Shared shuttle estimates">
+        <p>Sharing your location while this tab is open can help improve shuttle ETAs for everyone. Your location is used for the live estimate and is automatically cleared shortly after updates stop.</p>
+        <button id="sharing-button" type="button">Enable location for shared ETAs</button>
+        <p id="sharing-status" role="status" aria-live="polite">Location sharing is off.</p>
+      </section>
+    </main>
+
+  </body>
+</html>
