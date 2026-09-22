@@ -8,8 +8,55 @@ export const stops = {
 
 export const ROUTE_WIDTH_METERS = 400;
 export const MAX_ACCURACY_METERS = 100;
+export type ScheduleFallback = {
+  active: boolean;
+  minutes?: number;
+  time?: string;
+  status: string;
+};
 // ponytail: endpoint-only route model uses a 1.3 road-distance allowance; replace with a traced shuttle path when ride observations show ETA drift.
 const ROAD_DISTANCE_FACTOR = 1.3;
+const SCHEDULE_TIME_ZONE = 'America/Los_Angeles';
+
+export function scheduleFallback(now = new Date()): ScheduleFallback {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TIME_ZONE,
+    weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(values.weekday ?? '');
+  const hour = Number(values.hour);
+  const minute = Number(values.minute);
+  const minuteOfDay = hour * 60 + minute;
+  const opens = 7 * 60 + 30;
+  const closes = weekday === 5 ? 18 * 60 + 30 : 23 * 60;
+  const lastPickup = closes - 30;
+
+  if (weekday >= 1 && weekday <= 5 && minuteOfDay >= opens && minuteOfDay <= lastPickup) {
+    const scheduledMinute = opens + Math.ceil((minuteOfDay - opens) / 30) * 30;
+    const scheduledAt = new Date(now.getTime() + Math.max(0, scheduledMinute - minuteOfDay) * 60_000);
+    const time = new Intl.DateTimeFormat('en-US', {
+      timeZone: SCHEDULE_TIME_ZONE, hour: 'numeric', minute: '2-digit',
+    }).format(scheduledAt);
+    return {
+      active: true,
+      minutes: scheduledMinute - minuteOfDay,
+      time,
+      status: 'Scheduled every 30 min during regular weekday hours.',
+    };
+  }
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  for (let daysAhead = 0; daysAhead <= 7; daysAhead++) {
+    const nextWeekday = (weekday + daysAhead) % 7;
+    if (nextWeekday < 1 || nextWeekday > 5) continue;
+    if (daysAhead === 0 && minuteOfDay < opens) {
+      return { active: false, status: `Next regular schedule: today at 7:30 AM.` };
+    }
+    return { active: false, status: `Next regular schedule: ${dayNames[nextWeekday]} at 7:30 AM.` };
+  }
+  return { active: false, status: 'No scheduled service.' };
+}
 
 export function routePosition(point: Point) {
   const latitudeScale = 111_320;

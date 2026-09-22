@@ -11,7 +11,7 @@ bun run types
 bun run dev
 ```
 
-Open http://localhost:8787. After changing browser TypeScript, run `bun run build` and refresh. HTML/CSS changes are served directly.
+Open http://localhost:8787. Browser TypeScript rebuilds automatically, and Wrangler reloads the page when local files change.
 
 ## Apple Maps
 

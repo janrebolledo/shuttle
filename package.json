@@ -19,7 +19,7 @@
     "react-dom": "^19.3.0"
   },
   "scripts": {
-    "dev": "bun run build && wrangler dev --port 8787",
+    "dev": "bun run build && (bun run build --watch & wrangler dev --port 8787 --live-reload)",
     "build": "bun build src/client/main.ts --outdir public/build --target browser --minify",
     "types": "wrangler types",
     "check": "tsc --noEmit",

@@ -27,10 +27,16 @@
               <span>Cal Poly</span>
             </div>
           </div>
-          <div id="alert-sheet-root"></div>
+          <div class="map-actions">
+            <div id="alert-sheet-root"></div>
+            <div id="location-consent-root"></div>
+          </div>
         </div>
       </section>
       <section class="arrivals" aria-labelledby="destination">
+        <div class="sheet-grabber">
+          <button class="sheet-handle" type="button" aria-label="Expand arrivals" aria-expanded="false" aria-controls="destination"></button>
+        </div>
         <header class="destination">
           <button class="page-indicator" type="button" aria-label="Show destination 2 of 2: Cal Poly Pomona" aria-controls="destination">
             <i class="is-active" aria-hidden="true"></i><i aria-hidden="true"></i>
@@ -50,12 +56,6 @@
           <p class="arrival-detail" id="following-detail">Unavailable</p>
         </article>
       </section>
-      <section class="sharing" aria-label="Shared shuttle estimates">
-        <p>Sharing your location while this tab is open can help improve shuttle ETAs for everyone. Your location is used for the live estimate and is automatically cleared shortly after updates stop.</p>
-        <button id="sharing-button" type="button">Enable location for shared ETAs</button>
-        <p id="sharing-status" role="status" aria-live="polite">Location sharing is off.</p>
-      </section>
     </main>
-
   </body>
 </html>

@@ -47,6 +47,7 @@ export async function initializeMap() {
         new mapkit.Coordinate(34.0615, -117.811),
         new mapkit.CoordinateSpan(0.018, 0.023),
       ),
+      padding: new mapkit.Padding(0, 0, 540, 0),
       isScrollEnabled: false,
       isZoomEnabled: false,
       showsMapTypeControl: false,
