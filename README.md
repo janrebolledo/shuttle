@@ -1,6 +1,6 @@
 # Shuttle
 
-HTML/CSS implementation of [Figma frame 48:2](https://www.figma.com/design/G1kXTZzdupDlI54a7lwSX7/Shuttle-Tracker-App?node-id=48-2), with Bun tooling, Hono on Cloudflare Workers, Motion digit transitions, and [Lisse](https://corne.rs/) continuous corners.
+HTML/CSS implementation of [Figma frame 48:2](https://www.figma.com/design/G1kXTZzdupDlI54a7lwSX7/Shuttle-Tracker-App?node-id=48-2), with Bun tooling, Hono on Cloudflare Workers, Motion destination transitions, and [Lisse](https://corne.rs/) continuous corners.
 
 ## Run locally
 
@@ -27,7 +27,7 @@ The route model uses the provided SSB coordinate (`34.05847, -117.81793`) and th
 
 The app remains mostly vanilla TypeScript; only the alert sheet uses a React island. Tapping one of its four service alert choices posts to `/api/alerts`; the Worker validates it and writes it to logs, without durable storage. The feedback sheet uses filled Apple SF Symbols exported as SVGs from [sfsymbols-svg](https://github.com/brendanballon/sfsymbols-svg); Apple licenses these symbols for developing applications on Apple-branded products. Silk 0.10.1 is publicly installable and its unlayered styles are bundled into `/build/main.css`. The sheet declares `license="non-commercial"` based on the app’s confirmed exclusively non-commercial use. Commercial use requires purchasing a [Silk commercial license](https://silkhq.com/terms) and changing that declaration. Location requires HTTPS or localhost.
 
-Counts roll once on page load using Motion and Emil's design engineering guidance: a 280 ms ease-out, fixed digit widths, stationary units, and no movement with reduced motion enabled. Live arrival values update from the shared estimate and do not use simulated countdowns.
+Static sample arrival counters and their roll animation were replaced with live ETA ranges; no simulated countdowns are used.
 
 ## Validate / deploy
 

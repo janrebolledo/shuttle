@@ -86,6 +86,7 @@ let locationWatch: number | undefined;
 let socket: WebSocket | undefined;
 let sessionId: string | undefined;
 let rideDirection: Direction | undefined;
+let sessionActivityAt = 0;
 let latestReport: LocationReading | undefined;
 let lastSentAt = 0;
 let readings: LocationReading[] = [];
@@ -116,18 +117,21 @@ function renderEstimate(estimate: Estimate | null) {
 
 function connectFeed() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  socket.addEventListener('open', () => {
+  const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  socket = connection;
+  connection.addEventListener('open', () => {
     if (latestReport && sessionId) sendReport(latestReport);
   });
-  socket.addEventListener('message', ({ data }) => {
+  connection.addEventListener('message', ({ data }) => {
     try {
       const message = JSON.parse(String(data)) as { type?: string; estimate?: Estimate | null };
       if (message.type === 'snapshot') renderEstimate(message.estimate ?? null);
     } catch { /* Ignore malformed feed updates. */ }
   });
-  socket.addEventListener('close', () => setTimeout(connectFeed, 3_000));
-  socket.addEventListener('error', () => socket?.close());
+  connection.addEventListener('close', () => {
+    if (socket === connection) setTimeout(connectFeed, 3_000);
+  });
+  connection.addEventListener('error', () => connection.close());
 }
 
 function sendReport(reading: LocationReading) {
@@ -139,6 +143,7 @@ function sendReport(reading: LocationReading) {
     accuracy: reading.accuracy, direction, speedMps: reading.speedMps,
   }));
   lastSentAt = Date.now();
+  sessionActivityAt = lastSentAt;
 }
 
 function stopSharing(status = 'Location sharing is off.') {
@@ -147,6 +152,7 @@ function stopSharing(status = 'Location sharing is off.') {
   if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
   sessionId = undefined;
   rideDirection = undefined;
+  sessionActivityAt = 0;
   latestReport = undefined;
   readings = [];
   sharingButton && (sharingButton.textContent = 'Enable location for shared ETAs');
@@ -158,6 +164,13 @@ function distanceToNearestStop(point: Point) {
 }
 
 function handleLocation(position: GeolocationPosition) {
+  if (sessionId && Date.now() - sessionActivityAt > 75_000) {
+    socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'stop' }));
+    sessionId = undefined;
+    rideDirection = undefined;
+    sessionActivityAt = 0;
+    readings = [];
+  }
   const { latitude, longitude, accuracy, speed } = position.coords;
   const point = { latitude, longitude };
   if (accuracy > MAX_ACCURACY_METERS) {
@@ -170,6 +183,7 @@ function handleLocation(position: GeolocationPosition) {
       socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'stop' }));
       sessionId = undefined;
       rideDirection = undefined;
+      sessionActivityAt = 0;
       latestReport = undefined;
       sharingStatus && (sharingStatus.textContent = 'No longer on the shuttle route. Waiting near a pickup point.');
     }
@@ -187,6 +201,17 @@ function handleLocation(position: GeolocationPosition) {
   readings.push(reading);
   readings = readings.filter((item) => at - item.at < 90_000).slice(-8);
 
+  if (sessionId && readings.length >= 3) {
+    const recentStart = readings.at(-3);
+    const delta = recentStart ? reading.progress - recentStart.progress : 0;
+    const turnDirection = delta > 0.025 ? 'to-current' : delta < -0.025 ? 'to-ssb' : undefined;
+    if (turnDirection && turnDirection !== rideDirection && distanceToNearestStop(point) <= 250) {
+      rideDirection = turnDirection;
+      lastSentAt = 0;
+      sharingStatus && (sharingStatus.textContent = 'Shuttle turnaround detected. Updating shared direction.');
+    }
+  }
+
   if (!routeChosenManually && distanceToNearestStop(point) < 250) {
     setDestination(distanceMeters(point, stops.current) < distanceMeters(point, stops.ssb) ? 0 : 1, true);
   }
@@ -202,6 +227,7 @@ function handleLocation(position: GeolocationPosition) {
     if (beganAtStop && readings.length >= 4 && elapsed >= 15_000 && direction && speedMps >= 1.2 && speedMps <= 15) {
       sessionId = crypto.randomUUID();
       rideDirection = direction;
+      sessionActivityAt = Date.now();
       sharingStatus && (sharingStatus.textContent = 'Likely shuttle ride detected. Sharing the estimated shuttle position.');
       setDestination(direction === 'to-current' ? 1 : 0, true);
       connectFeed();
@@ -253,32 +279,6 @@ document.querySelectorAll<HTMLElement>('[data-corner]').forEach((element) => {
   update();
   observeResize(element, update);
 });
-
-// One short roll reveals the fixtures. No countdown or timer.
-// Emil: transform-only movement, stationary units, settle within 300 ms.
-if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-  document.querySelectorAll<HTMLElement>('[data-count]').forEach((element) => {
-    const digits = [...element.dataset.count!].map((digit) => {
-      const window = document.createElement('span');
-      window.className = 'digit';
-      const track = document.createElement('span');
-      track.className = 'digit-track';
-      for (const value of [String((Number(digit) + 1) % 10), digit]) {
-        const face = document.createElement('span');
-        face.textContent = value;
-        track.appendChild(face);
-      }
-      window.appendChild(track);
-      return window;
-    });
-    element.replaceChildren(...digits);
-    for (const digit of digits) {
-      animate(digit.firstElementChild!, { transform: ['translateY(0)', 'translateY(-50%)'] }, {
-        duration: 0.28, ease: [0.23, 1, 0.32, 1],
-      });
-    }
-  });
-}
 
 void initializeMap().catch(() => {
   console.warn('Apple Maps unavailable; map was not loaded.');

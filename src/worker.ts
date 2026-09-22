@@ -28,7 +28,7 @@ app.post('/api/alerts', async (c) => {
   return c.body(null, 202);
 });
 
-// Transport only: no tracking, broadcasts, subscriptions, or arrival calculations.
+// One Durable Object coordinates the single shuttle's temporary shared estimate.
 app.get('/ws', (c) => {
   if (c.req.header('Upgrade')?.toLowerCase() !== 'websocket') {
     return c.text('WebSocket upgrade required', 426);

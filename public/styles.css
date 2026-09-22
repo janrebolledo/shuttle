@@ -278,28 +278,6 @@ h2 {
 .arrival-status {
   color: #cac9c7;
 }
-.count {
-  display: inline-flex;
-  font-variant-numeric: tabular-nums;
-}
-.digit {
-  position: relative;
-  display: inline-block;
-  width: 0.59em;
-  height: 1.15em;
-  overflow: hidden;
-  vertical-align: bottom;
-}
-.digit-track {
-  display: flex;
-  flex-direction: column;
-}
-.digit-track span {
-  display: block;
-  height: 1.15em;
-  line-height: 1.15;
-  text-align: center;
-}
 footer {
   margin-top: 19px;
   padding: 0 16px;

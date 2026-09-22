@@ -60,5 +60,5 @@ export async function initializeMap() {
     section.classList.remove('is-live');
     throw error;
   }
-  // Keep Apple's attribution unobscured. Route/location data comes later.
+  // Keep Apple's attribution unobscured below the shared shuttle marker.
 }

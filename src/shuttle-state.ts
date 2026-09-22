@@ -55,6 +55,7 @@ export class ShuttleState extends DurableObject<Env> {
     if ('type' in body && body.type === 'stop' && attachment.sessionId) {
       await this.ctx.storage.delete(`r:${attachment.sessionId}`);
       socket.serializeAttachment({ sessionId: null, lastUpdateAt: 0 });
+      await this.scheduleCleanup();
       await this.publish();
       return;
     }
@@ -100,7 +101,7 @@ export class ShuttleState extends DurableObject<Env> {
       updatedAt: now,
     };
     await this.ctx.storage.put(key, report);
-    await this.ctx.storage.setAlarm(now + 15_000);
+    await this.scheduleCleanup();
     socket.serializeAttachment({ sessionId: report.sessionId, lastUpdateAt: now });
     await this.publish();
   }
@@ -111,9 +112,19 @@ export class ShuttleState extends DurableObject<Env> {
     for (const [key, report] of reports) {
       if (now - report.updatedAt > REPORT_TTL_MS) await this.ctx.storage.delete(key);
     }
-    const remaining = await this.ctx.storage.list<RiderReport>({ prefix: 'r:' });
-    if (remaining.size) await this.ctx.storage.setAlarm(now + 15_000);
+    await this.scheduleCleanup();
     await this.publish();
+  }
+
+  private async scheduleCleanup() {
+    const reports = await this.ctx.storage.list<RiderReport>({ prefix: 'r:' });
+    if (!reports.size) {
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+    const expiresAt = Math.min(...[...reports.values()].map((report) => report.updatedAt + REPORT_TTL_MS));
+    await this.ctx.storage.setAlarm(Math.max(Date.now() + 1_000, expiresAt));
   }
 
   private async getEstimate(): Promise<Estimate | null> {
@@ -161,7 +172,7 @@ function isLocation(value: Record<string, unknown>): value is Record<string, unk
   type: 'location'; sessionId: string; latitude: number; longitude: number;
   accuracy: number; direction: Direction; speedMps: number;
 } {
-  return value.type === 'location' && typeof value.sessionId === 'string' && value.sessionId.length <= 64 &&
+  return value.type === 'location' && typeof value.sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.sessionId) &&
     typeof value.latitude === 'number' && Number.isFinite(value.latitude) && value.latitude >= -90 && value.latitude <= 90 &&
     typeof value.longitude === 'number' && Number.isFinite(value.longitude) && value.longitude >= -180 && value.longitude <= 180 &&
     typeof value.accuracy === 'number' && Number.isFinite(value.accuracy) && value.accuracy <= MAX_ACCURACY_METERS && value.accuracy >= 0 &&
