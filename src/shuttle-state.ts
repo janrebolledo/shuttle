@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { etaRange, MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, routePosition, stops, type Direction, type Point } from './shuttle';
+import { etaRange, getRoutePath, MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, routePosition, routeLength, stops, type Direction, type Point } from './shuttle';
 
 const REPORT_TTL_MS = 75_000;
 const CLUSTER_WINDOW_MS = 35_000;
@@ -14,6 +14,7 @@ type RiderReport = Point & {
   progress: number;
   evidence: number;
   updatedAt: number;
+  routePath: Point[];
 };
 
 type Estimate = {
@@ -64,7 +65,8 @@ export class ShuttleState extends DurableObject<Env> {
     const now = Date.now();
     if (now - attachment.lastUpdateAt < REPORT_INTERVAL_MS) return;
     if (attachment.sessionId && attachment.sessionId !== body.sessionId) return;
-    const { rawProgress, crossTrackMeters, routeLengthMeters } = routePosition(body);
+    const routePath = body.routePath ?? getRoutePath();
+    const { rawProgress, crossTrackMeters, routeLengthMeters } = routePosition(body, routePath);
     if (rawProgress < -0.1 || rawProgress > 1.1 || crossTrackMeters > ROUTE_WIDTH_METERS) return;
 
     const key = `r:${body.sessionId}`;
@@ -99,6 +101,7 @@ export class ShuttleState extends DurableObject<Env> {
       progress: rawProgress,
       evidence,
       updatedAt: now,
+      routePath,
     };
     await this.ctx.storage.put(key, report);
     await this.scheduleCleanup();
@@ -154,8 +157,8 @@ export class ShuttleState extends DurableObject<Env> {
       updatedAt: Math.max(...group.map((item) => item.updatedAt)),
       contributors: group.length,
       arrivals: {
-        ssb: etaRange(location, lead.direction, 'ssb', speed),
-        current: etaRange(location, lead.direction, 'current', speed),
+        ssb: etaRange(location, lead.direction, 'ssb', speed, lead.routePath),
+        current: etaRange(location, lead.direction, 'current', speed, lead.routePath),
       },
     };
   }
@@ -170,9 +173,15 @@ export class ShuttleState extends DurableObject<Env> {
 
 function isLocation(value: Record<string, unknown>): value is Record<string, unknown> & {
   type: 'location'; sessionId: string; latitude: number; longitude: number;
-  accuracy: number; direction: Direction; speedMps: number;
+  accuracy: number; direction: Direction; speedMps: number; routePath?: Point[];
 } {
-  return value.type === 'location' && typeof value.sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.sessionId) &&
+  const routePath = value.routePath;
+  const validRoute = routePath === undefined || Array.isArray(routePath) && routePath.length >= 2 && routePath.length <= 100 &&
+    routePath.every((point) => !!point && typeof point === 'object' && 'latitude' in point && 'longitude' in point &&
+      typeof point.latitude === 'number' && Number.isFinite(point.latitude) && point.latitude >= -90 && point.latitude <= 90 &&
+      typeof point.longitude === 'number' && Number.isFinite(point.longitude) && point.longitude >= -180 && point.longitude <= 180) &&
+    distance(routePath[0]!, stops.ssb) <= 500 && distance(routePath.at(-1)!, stops.current) <= 500 && routeLength(routePath) <= 20_000;
+  return value.type === 'location' && validRoute && typeof value.sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.sessionId) &&
     typeof value.latitude === 'number' && Number.isFinite(value.latitude) && value.latitude >= -90 && value.latitude <= 90 &&
     typeof value.longitude === 'number' && Number.isFinite(value.longitude) && value.longitude >= -180 && value.longitude <= 180 &&
     typeof value.accuracy === 'number' && Number.isFinite(value.accuracy) && value.accuracy <= MAX_ACCURACY_METERS && value.accuracy >= 0 &&

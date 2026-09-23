@@ -1,11 +1,9 @@
-import { animate } from 'motion/mini';
 import { generateClipPath, observeResize } from '@lisse/core';
-import { initializeMap, updateShuttleMarker, updateUserLocation } from './map';
-import { MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, distanceMeters, routePosition, scheduleFallback, stops, type Direction, type Point } from '../shuttle';
+import { initializeMap, selectRoute, updateShuttleMarker, updateUserLocation } from './map';
+import { MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, distanceMeters, etaRange, getRoutePath, pointAtRouteProgress, routeLength, routePosition, scheduleFallback, stops, type Direction, type Point } from '../shuttle';
 import './alert-sheet';
 import './location-consent';
 
-const destinationHeading = document.querySelector<HTMLHeadingElement>('#destination');
 const destinationButton = document.querySelector<HTMLButtonElement>('.page-indicator');
 const destinationDots = destinationButton?.querySelectorAll<HTMLElement>('i');
 const arrivals = document.querySelector<HTMLElement>('.arrivals');
@@ -69,22 +67,18 @@ sheetHandle?.addEventListener('pointercancel', finishSheetDrag);
 
 function setDestination(index: number, automatic = false) {
   if (!automatic) routeChosenManually = true;
-  const heading = destinationHeading;
   const destination = destinations[index];
-  if (!heading || !destinationButton || !destinationDots || !destination || index === destinationIndex) return;
+  if (!destinationButton || !destinationDots || !destination || index === destinationIndex) return;
 
   destinationIndex = index;
-  heading.textContent = destination;
+  selectRoute(index === 0 ? 'to-current' : 'to-ssb');
   renderEstimate(lastEstimate);
-  arrivalCarousel?.scrollTo({ left: index * arrivalCarousel.clientWidth, behavior: 'smooth' });
+  arrivalCarousel?.scrollTo({
+    left: index * arrivalCarousel.clientWidth,
+    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+  });
   destinationButton.setAttribute('aria-label', `Change destination, currently ${index + 1} of 2: ${destination}`);
   destinationDots.forEach((dot, dotIndex) => dot.classList.toggle('is-active', dotIndex === index));
-
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    animate(heading, { opacity: [0, 1], transform: ['translateY(5px)', 'translateY(0)'] }, {
-      duration: 0.18, ease: [0.23, 1, 0.32, 1],
-    });
-  }
 }
 
 let suppressPagerClick = false;
@@ -158,6 +152,10 @@ let latestReport: LocationReading | undefined;
 let lastSentAt = 0;
 let readings: LocationReading[] = [];
 let lastEstimate: Estimate | null = null;
+let debugSimulation: 'waiting' | 'waiting-current' | Direction | null = null;
+let resumeLocationAfterDebug = false;
+let debugProgress = 0.5;
+let debugPlaybackTimer: ReturnType<typeof setInterval> | undefined;
 
 function formatRange(range: { min: number; max: number }) {
   return range.min === range.max ? `${range.min} min` : `${range.min}–${range.max} min`;
@@ -200,6 +198,129 @@ function renderEstimate(estimate: Estimate | null) {
   updateShuttleMarker(estimate);
 }
 
+function setupLocationDebug() {
+  if (!['localhost', '127.0.0.1', '::1'].includes(location.hostname) && !new URLSearchParams(location.search).has('debug')) return;
+  const toggle = document.createElement('button');
+  toggle.className = 'location-debug-toggle';
+  toggle.type = 'button';
+  toggle.textContent = 'Debug';
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-controls', 'location-debug-panel');
+  const panel = document.createElement('section');
+  panel.className = 'location-debug-panel';
+  panel.id = 'location-debug-panel';
+  panel.hidden = true;
+  panel.setAttribute('aria-label', 'Location simulation');
+  panel.innerHTML = '<strong>Simulate location</strong><button type="button" data-simulate="waiting">Waiting at SSB</button><button type="button" data-simulate="waiting-current">Waiting at The Current</button><button type="button" data-simulate="to-current">On route to The Current</button><button type="button" data-simulate="to-ssb">On route to Cal Poly Pomona</button><button type="button" data-simulate="play-pause" hidden>Play simulation</button><button type="button" data-simulate="off">Use device location</button>';
+  document.body.appendChild(toggle);
+  document.body.appendChild(panel);
+  toggle.addEventListener('click', () => {
+    panel.hidden = !panel.hidden;
+    toggle.setAttribute('aria-expanded', String(!panel.hidden));
+  });
+  panel.addEventListener('click', (event) => {
+    const button = (event.target as Element).closest<HTMLButtonElement>('[data-simulate]');
+    if (!button) return;
+    const mode = button.dataset.simulate;
+    if (mode === 'play-pause') {
+      if (debugPlaybackTimer) {
+        clearInterval(debugPlaybackTimer);
+        debugPlaybackTimer = undefined;
+        button.textContent = 'Play simulation';
+      } else if (debugSimulation === 'to-current' || debugSimulation === 'to-ssb') {
+        const direction = debugSimulation;
+        if (debugProgress === (direction === 'to-current' ? 1 : 0)) debugProgress = direction === 'to-current' ? 0 : 1;
+        button.textContent = 'Pause simulation';
+        const routeLengthMeters = routeLength();
+        debugPlaybackTimer = setInterval(() => {
+          debugProgress = Math.max(0, Math.min(1, debugProgress + (direction === 'to-current' ? 1 : -1) * 8 / routeLengthMeters));
+          const point = pointAtRouteProgress(debugProgress);
+          updateUserLocation(point, true);
+          const arrivals = {
+            ssb: etaRange(point, direction, 'ssb', 8),
+            current: etaRange(point, direction, 'current', 8),
+          };
+          renderEstimate({ ...point, direction, updatedAt: Date.now(), contributors: 1, arrivals });
+          latestReport = makeDebugReading(point);
+          sendReport(latestReport);
+          if (debugProgress === (direction === 'to-current' ? 1 : 0)) {
+            clearInterval(debugPlaybackTimer);
+            debugPlaybackTimer = undefined;
+            button.textContent = 'Play simulation';
+          }
+        }, 1_000);
+      }
+      return;
+    }
+    if (mode === 'off') {
+      if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
+      debugPlaybackTimer = undefined;
+      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+      const resume = resumeLocationAfterDebug;
+      debugSimulation = null;
+      resumeLocationAfterDebug = false;
+      sessionId = undefined;
+      rideDirection = undefined;
+      latestReport = undefined;
+      readings = [];
+      updateUserLocation(null);
+      renderEstimate(null);
+      panel.querySelector<HTMLButtonElement>('[data-simulate="play-pause"]')!.hidden = true;
+      sharingStatus && (sharingStatus.textContent = 'Location simulation is off.');
+      if (resume) startSharing();
+      return;
+    }
+    if (!debugSimulation) {
+      resumeLocationAfterDebug = locationWatch !== undefined;
+      if (locationWatch !== undefined) navigator.geolocation.clearWatch(locationWatch);
+      if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
+      locationWatch = undefined;
+      locationWaitTimer = undefined;
+    }
+    debugSimulation = mode as 'waiting' | 'waiting-current' | Direction;
+    if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
+    debugPlaybackTimer = undefined;
+    const playback = panel.querySelector<HTMLButtonElement>('[data-simulate="play-pause"]')!;
+    const waiting = debugSimulation === 'waiting' || debugSimulation === 'waiting-current';
+    playback.hidden = waiting;
+    playback.textContent = 'Play simulation';
+    readings = [];
+    latestReport = undefined;
+    if (waiting) debugProgress = mode === 'waiting-current' ? 1 : 0;
+    else {
+      const direction = mode as Direction;
+      setDestination(direction === 'to-current' ? 0 : 1, true);
+      debugProgress = direction === 'to-current' ? 0 : 1;
+    }
+    const point = waiting ? (mode === 'waiting-current' ? stops.current : stops.ssb) : pointAtRouteProgress(debugProgress);
+    updateUserLocation(point);
+    if (waiting) {
+      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+      sessionId = undefined;
+      rideDirection = undefined;
+      latestReport = undefined;
+      renderEstimate(null);
+      sharingStatus && (sharingStatus.textContent = mode === 'waiting-current'
+        ? 'Simulating a user waiting at The Current.'
+        : 'Simulating a user waiting at SSB.');
+    } else {
+      const direction = mode as Direction;
+      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+      sessionId = crypto.randomUUID();
+      rideDirection = direction;
+      updateUserLocation(point, true);
+      const routeEstimate = etaRange(point, direction, 'ssb', 7);
+      const currentEstimate = etaRange(point, direction, 'current', 7);
+      renderEstimate({ ...point, direction, updatedAt: Date.now(), contributors: 1, arrivals: { ssb: routeEstimate, current: currentEstimate } });
+      latestReport = makeDebugReading(point);
+      lastSentAt = 0;
+      connectFeed();
+      sendReport(latestReport);
+      sharingStatus && (sharingStatus.textContent = `Simulating a user on route to ${direction === 'to-current' ? 'The Current' : 'Cal Poly Pomona'}.`);
+    }
+  });
+}
+
 function connectFeed() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -225,7 +346,7 @@ function sendReport(reading: LocationReading) {
   if (!direction) return;
   socket.send(JSON.stringify({
     type: 'location', sessionId, latitude: reading.latitude, longitude: reading.longitude,
-    accuracy: reading.accuracy, direction, speedMps: reading.speedMps,
+    accuracy: reading.accuracy, direction, speedMps: reading.speedMps, routePath: getRoutePath(),
   }));
   lastSentAt = Date.now();
   sessionActivityAt = lastSentAt;
@@ -257,7 +378,12 @@ function distanceToNearestStop(point: Point) {
   return Math.min(distanceMeters(point, stops.ssb), distanceMeters(point, stops.current));
 }
 
+function makeDebugReading(point: Point): LocationReading {
+  return { ...point, accuracy: 5, at: Date.now(), progress: routePosition(point).progress, speedMps: 8 };
+}
+
 function handleLocation(position: GeolocationPosition) {
+  if (debugSimulation) return;
   hasLocationFix = true;
   if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
   locationWaitTimer = undefined;
@@ -272,7 +398,7 @@ function handleLocation(position: GeolocationPosition) {
   }
   const { latitude, longitude, accuracy, speed } = position.coords;
   const point = { latitude, longitude };
-  updateUserLocation(point);
+  updateUserLocation(point, Boolean(sessionId));
   if (accuracy > MAX_ACCURACY_METERS) {
     if (sharingStatus) sharingStatus.textContent = 'Location is on. Waiting for a more accurate reading…';
     return;
@@ -286,6 +412,7 @@ function handleLocation(position: GeolocationPosition) {
       sessionActivityAt = 0;
       latestReport = undefined;
       renderEstimate(lastEstimate);
+      updateUserLocation(point);
     }
     sharingStatus && (sharingStatus.textContent = 'Location is outside the shuttle corridor. Sharing is on; waiting near SSB or The Current.');
     readings = [];
@@ -329,6 +456,7 @@ function handleLocation(position: GeolocationPosition) {
       sessionId = crypto.randomUUID();
       rideDirection = direction;
       sessionActivityAt = Date.now();
+      updateUserLocation(point, true);
       sharingStatus && (sharingStatus.textContent = 'Likely shuttle ride detected. Sharing the estimated shuttle position.');
       renderEstimate(lastEstimate);
       setDestination(direction === 'to-current' ? 0 : 1, true);
@@ -396,6 +524,7 @@ sharingButton?.addEventListener('click', () => {
   else stopSharing();
 });
 renderEstimate(null);
+setupLocationDebug();
 connectFeed();
 setInterval(() => renderEstimate(lastEstimate), 15_000);
 

@@ -203,7 +203,7 @@ h2 {
   .report-button, .settings-button, .alert-close, .settings-switch, .settings-switch span { transition: none; }
 }
 .destination {
-  padding: 12px 36px 25px;
+  padding: 12px 36px 0;
 }
 .arrivals {
   position: absolute;
@@ -282,6 +282,7 @@ h2 {
   letter-spacing: 0.16px;
   margin-bottom: 8px;
 }
+.arrival-route h1 { padding: 0 36px 25px; }
 h1 {
   font-size: 32px;
   line-height: 38px;
@@ -358,10 +359,55 @@ footer {
 .map-section.is-live #map {
   visibility: visible;
 }
+.location-debug-toggle,
+.location-debug-panel {
+  position: fixed;
+  z-index: 20;
+  right: 14px;
+  color: #242521;
+  background: rgb(255 255 255 / 94%);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 2px 12px rgb(35 34 30 / 16%);
+}
+.location-debug-toggle {
+  bottom: calc(16px + var(--safe-area-inset-bottom));
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 22px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.location-debug-panel {
+  right: 14px;
+  bottom: calc(68px + var(--safe-area-inset-bottom));
+  display: grid;
+  width: min(280px, calc(100vw - 28px));
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 18px;
+}
+.location-debug-panel[hidden] { display: none; }
+.location-debug-panel strong { padding: 2px 3px 5px; font-size: 14px; }
+.location-debug-panel button {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: #f2f2f0;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.location-debug-panel button:active { background: #e7e7e4; }
+.location-debug-toggle:focus-visible,
+.location-debug-panel button:focus-visible { outline: 2px solid #3478f6; outline-offset: 2px; }
 @media (max-width: 360px) {
   .destination {
     padding-inline: 30px;
   }
+  .arrival-route h1 { padding-inline: 30px; }
   .arrival-card {
     padding-inline: 20px;
   }

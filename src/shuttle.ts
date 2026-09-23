@@ -3,19 +3,26 @@ export type Direction = 'to-current' | 'to-ssb';
 
 export const stops = {
   ssb: { latitude: 34.05847, longitude: -117.81793 },
-  current: { latitude: 34.0644634, longitude: -117.8036599 },
+  current: { latitude: 34.06381, longitude: -117.80303 },
 } satisfies Record<string, Point>;
 
 export const ROUTE_WIDTH_METERS = 400;
 export const MAX_ACCURACY_METERS = 100;
+let activeRoute: Point[] = [stops.ssb, stops.current];
+
+export function setRoutePath(path: Point[]) {
+  if (path.length >= 2) activeRoute = path;
+}
+
+export function getRoutePath() {
+  return activeRoute;
+}
 export type ScheduleFallback = {
   active: boolean;
   minutes?: number;
   time?: string;
   status: string;
 };
-// ponytail: endpoint-only route model uses a 1.3 road-distance allowance; replace with a traced shuttle path when ride observations show ETA drift.
-const ROAD_DISTANCE_FACTOR = 1.3;
 const SCHEDULE_TIME_ZONE = 'America/Los_Angeles';
 
 export function scheduleFallback(now = new Date()): ScheduleFallback {
@@ -58,18 +65,48 @@ export function scheduleFallback(now = new Date()): ScheduleFallback {
   return { active: false, status: 'No scheduled service.' };
 }
 
-export function routePosition(point: Point) {
-  const latitudeScale = 111_320;
-  const longitudeScale = latitudeScale * Math.cos(((stops.ssb.latitude + stops.current.latitude) / 2) * Math.PI / 180);
-  const dx = (stops.current.longitude - stops.ssb.longitude) * longitudeScale;
-  const dy = (stops.current.latitude - stops.ssb.latitude) * latitudeScale;
-  const px = (point.longitude - stops.ssb.longitude) * longitudeScale;
-  const py = (point.latitude - stops.ssb.latitude) * latitudeScale;
-  const lengthSquared = dx * dx + dy * dy;
-  const rawProgress = (px * dx + py * dy) / lengthSquared;
-  const progress = Math.max(0, Math.min(1, rawProgress));
-  const crossTrackMeters = Math.hypot(px - progress * dx, py - progress * dy);
-  return { progress, rawProgress, crossTrackMeters, routeLengthMeters: Math.sqrt(lengthSquared) };
+export function routeLength(path = activeRoute) {
+  return path.slice(1).reduce((length, point, index) => length + distanceMeters(path[index]!, point), 0);
+}
+
+export function pointAtRouteProgress(progress: number, path = activeRoute): Point {
+  const lengths = path.slice(1).map((point, index) => distanceMeters(path[index]!, point));
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  let remaining = Math.max(0, Math.min(1, progress)) * total;
+  for (let index = 0; index < lengths.length; index++) {
+    const length = lengths[index]!;
+    if (remaining <= length || index === lengths.length - 1) {
+      const start = path[index]!;
+      const end = path[index + 1]!;
+      const fraction = length ? remaining / length : 0;
+      return { latitude: start.latitude + (end.latitude - start.latitude) * fraction, longitude: start.longitude + (end.longitude - start.longitude) * fraction };
+    }
+    remaining -= length;
+  }
+  return path[0]!;
+}
+
+export function routePosition(point: Point, path = activeRoute) {
+  let traversedMeters = 0;
+  let closest = { progress: 0, crossTrackMeters: Infinity };
+  const totalMeters = routeLength(path);
+  for (let index = 0; index < path.length - 1; index++) {
+    const start = path[index]!;
+    const end = path[index + 1]!;
+    const latitudeScale = 111_320;
+    const longitudeScale = latitudeScale * Math.cos(((start.latitude + end.latitude + point.latitude) / 3) * Math.PI / 180);
+    const dx = (end.longitude - start.longitude) * longitudeScale;
+    const dy = (end.latitude - start.latitude) * latitudeScale;
+    const px = (point.longitude - start.longitude) * longitudeScale;
+    const py = (point.latitude - start.latitude) * latitudeScale;
+    const lengthSquared = dx * dx + dy * dy;
+    const segmentMeters = Math.sqrt(lengthSquared);
+    const fraction = lengthSquared ? Math.max(0, Math.min(1, (px * dx + py * dy) / lengthSquared)) : 0;
+    const crossTrackMeters = Math.hypot(px - fraction * dx, py - fraction * dy);
+    if (crossTrackMeters < closest.crossTrackMeters) closest = { progress: totalMeters ? (traversedMeters + fraction * segmentMeters) / totalMeters : 0, crossTrackMeters };
+    traversedMeters += segmentMeters;
+  }
+  return { progress: closest.progress, rawProgress: closest.progress, crossTrackMeters: closest.crossTrackMeters, routeLengthMeters: totalMeters };
 }
 
 export function distanceMeters(a: Point, b: Point) {
@@ -80,10 +117,10 @@ export function distanceMeters(a: Point, b: Point) {
   );
 }
 
-export function etaRange(point: Point, direction: Direction, target: 'ssb' | 'current', speedMps: number) {
-  const { progress, routeLengthMeters } = routePosition(point);
+export function etaRange(point: Point, direction: Direction, target: 'ssb' | 'current', speedMps: number, path = activeRoute) {
+  const { progress, routeLengthMeters } = routePosition(point, path);
   const targetProgress = target === 'current' ? 1 : 0;
-  const remaining = Math.abs(targetProgress - progress) * routeLengthMeters * ROAD_DISTANCE_FACTOR;
+  const remaining = Math.abs(targetProgress - progress) * routeLengthMeters;
   const speed = Math.max(2, Math.min(12, speedMps));
   let lowSeconds = remaining / (speed * 1.25);
   let highSeconds = remaining / (speed * 0.7);
@@ -93,16 +130,16 @@ export function etaRange(point: Point, direction: Direction, target: 'ssb' | 'cu
   const headingToTarget = (direction === 'to-current' && target === 'current') || (direction === 'to-ssb' && target === 'ssb');
   if (!headingToTarget) {
     const turnaroundMeters = target === 'current'
-      ? (progress + 1) * routeLengthMeters * ROAD_DISTANCE_FACTOR
-      : (2 - progress) * routeLengthMeters * ROAD_DISTANCE_FACTOR;
+      ? (progress + 1) * routeLengthMeters
+      : (2 - progress) * routeLengthMeters;
     lowSeconds = turnaroundMeters / (speed * 1.25) + 60;
     highSeconds = turnaroundMeters / (speed * 0.7) + 180;
   }
 
   const roundMinutes = (seconds: number) => Math.max(0, Math.round(seconds / 60));
   const next = { min: roundMinutes(lowSeconds), max: Math.max(1, roundMinutes(highSeconds)) };
-  const circuitLow = (2 * routeLengthMeters * ROAD_DISTANCE_FACTOR) / (speed * 1.25) + 120;
-  const circuitHigh = (2 * routeLengthMeters * ROAD_DISTANCE_FACTOR) / (speed * 0.7) + 360;
+  const circuitLow = (2 * routeLengthMeters) / (speed * 1.25) + 120;
+  const circuitHigh = (2 * routeLengthMeters) / (speed * 0.7) + 360;
   return {
     next,
     following: {
