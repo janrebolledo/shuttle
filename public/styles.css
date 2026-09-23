@@ -218,7 +218,7 @@ h2 {
   backdrop-filter: blur(12px);
   border: 1px solid rgb(255 255 255 / 72%);
   box-shadow: 0 -8px 30px rgb(0 0 0 / 10%);
-  touch-action: pan-y pinch-zoom;
+  touch-action: pan-x pan-y pinch-zoom;
   transition: height 260ms cubic-bezier(0.23, 1, 0.32, 1), border-radius 260ms ease;
 }
 .arrivals.is-expanded {
@@ -289,11 +289,25 @@ h1 {
   letter-spacing: -1.05px;
 }
 .arrival-card {
+  width: calc(100% - 28px);
+  flex: none;
   margin: 0 14px 16px;
   padding: 22px;
   min-height: 129px;
   border-radius: 24px;
 }
+.arrival-carousel {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.arrival-route { min-width: 0; flex: 0 0 100%; scroll-snap-align: start; }
+.arrival-carousel::-webkit-scrollbar { display: none; }
+.arrival-carousel:focus-visible { outline: 2px solid #3478f6; outline-offset: -2px; }
 .arrival-card--next {
   background: #3f3f3f;
   color: #fff;
@@ -339,7 +353,7 @@ footer {
   z-index: 0;
   inset: 0 0 12px;
   visibility: hidden;
-  touch-action: pan-y pinch-zoom;
+  touch-action: none;
 }
 .map-section.is-live #map {
   visibility: visible;

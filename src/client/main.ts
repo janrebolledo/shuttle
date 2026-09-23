@@ -1,6 +1,6 @@
 import { animate } from 'motion/mini';
 import { generateClipPath, observeResize } from '@lisse/core';
-import { initializeMap, updateShuttleMarker } from './map';
+import { initializeMap, updateShuttleMarker, updateUserLocation } from './map';
 import { MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, distanceMeters, routePosition, scheduleFallback, stops, type Direction, type Point } from '../shuttle';
 import './alert-sheet';
 import './location-consent';
@@ -9,15 +9,11 @@ const destinationHeading = document.querySelector<HTMLHeadingElement>('#destinat
 const destinationButton = document.querySelector<HTMLButtonElement>('.page-indicator');
 const destinationDots = destinationButton?.querySelectorAll<HTMLElement>('i');
 const arrivals = document.querySelector<HTMLElement>('.arrivals');
+const arrivalCarousel = document.querySelector<HTMLElement>('.arrival-carousel');
 const sheetHandle = document.querySelector<HTMLButtonElement>('.sheet-handle');
 const mapSection = document.querySelector<HTMLElement>('.map-section');
 const sharingButton = document.querySelector<HTMLButtonElement>('#sharing-button');
 const sharingStatus = document.querySelector<HTMLElement>('#sharing-status');
-const signalIcon = document.querySelector<HTMLElement>('.icon--signal');
-const nextRange = document.querySelector<HTMLElement>('#next-range');
-const nextDetail = document.querySelector<HTMLElement>('#next-detail');
-const followingRange = document.querySelector<HTMLElement>('#following-range');
-const followingDetail = document.querySelector<HTMLElement>('#following-detail');
 const destinations = ['the current', 'cal poly pomona'];
 let destinationIndex = 0;
 let routeChosenManually = false;
@@ -80,6 +76,7 @@ function setDestination(index: number, automatic = false) {
   destinationIndex = index;
   heading.textContent = destination;
   renderEstimate(lastEstimate);
+  arrivalCarousel?.scrollTo({ left: index * arrivalCarousel.clientWidth, behavior: 'smooth' });
   destinationButton.setAttribute('aria-label', `Change destination, currently ${index + 1} of 2: ${destination}`);
   destinationDots.forEach((dot, dotIndex) => dot.classList.toggle('is-active', dotIndex === index));
 
@@ -100,10 +97,25 @@ destinationButton?.addEventListener('click', (event) => {
   setDestination(1 - destinationIndex);
 });
 
+let arrivalScrollTimer: ReturnType<typeof setTimeout> | undefined;
+function syncDestinationFromCarousel() {
+  if (!arrivalCarousel?.clientWidth) return;
+  const index = Math.round(arrivalCarousel.scrollLeft / arrivalCarousel.clientWidth);
+  if (index !== destinationIndex) setDestination(index);
+}
+arrivalCarousel?.addEventListener('scroll', () => {
+  if (arrivalScrollTimer) clearTimeout(arrivalScrollTimer);
+  arrivalScrollTimer = setTimeout(syncDestinationFromCarousel, 300);
+}, { passive: true });
+arrivalCarousel?.addEventListener('scrollend', () => {
+  if (arrivalScrollTimer) clearTimeout(arrivalScrollTimer);
+  syncDestinationFromCarousel();
+});
+
 function enableRouteSwipe(surface: HTMLElement | null, capture = false) {
   let swipeStart: { x: number; y: number; pointerId: number; target: EventTarget | null } | undefined;
   surface?.addEventListener('pointerdown', (event) => {
-    if (!event.isPrimary || event.button !== 0 || (event.target as Element).closest('button, a, input')) return;
+    if (!event.isPrimary || event.button !== 0 || (event.target as Element).closest('.arrival-carousel, #map, button, a, input')) return;
     swipeStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId, target: event.target };
   }, capture);
   surface?.addEventListener('pointerup', (event) => {
@@ -154,25 +166,38 @@ function formatRange(range: { min: number; max: number }) {
 function renderEstimate(estimate: Estimate | null) {
   lastEstimate = estimate;
   const unavailable = !estimate || Date.now() - estimate.updatedAt > 75_000;
-  signalIcon?.classList.toggle('is-unavailable', unavailable);
+  document.querySelectorAll<HTMLElement>('.arrival-route').forEach((route, index) => {
+    const nextRange = route.querySelector<HTMLElement>('[data-estimate="next-range"]');
+    const nextDetail = route.querySelector<HTMLElement>('[data-estimate="next-detail"]');
+    const followingRange = route.querySelector<HTMLElement>('[data-estimate="following-range"]');
+    const followingDetail = route.querySelector<HTMLElement>('[data-estimate="following-detail"]');
+    route.querySelector<HTMLElement>('[data-estimate="signal"]')?.classList.toggle('is-unavailable', unavailable);
+    if (unavailable) {
+      const fallback = scheduleFallback();
+      const onThisLeg = sessionId && rideDirection === (index === 0 ? 'to-current' : 'to-ssb');
+      nextRange && (nextRange.textContent = onThisLeg ? 'on shuttle' : '—');
+      nextDetail && (nextDetail.textContent = onThisLeg ? 'You’re riding this shuttle.' : 'Live ETA unavailable');
+      followingRange && (followingRange.textContent = fallback.minutes === undefined ? '—' : `${fallback.minutes} min`);
+      followingDetail && (followingDetail.textContent = fallback.time
+        ? `Scheduled ${fallback.time}`
+        : fallback.status);
+      return;
+    }
+    const routeArrivals = estimate.arrivals[index === 0 ? 'current' : 'ssb'];
+    const onThisLeg = sessionId && rideDirection === (index === 0 ? 'to-current' : 'to-ssb');
+    nextRange && (nextRange.textContent = onThisLeg ? 'on shuttle' : formatRange(routeArrivals.next));
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - estimate.updatedAt) / 1000));
+    nextDetail && (nextDetail.textContent = onThisLeg
+      ? 'You’re riding this shuttle.'
+      : `Estimated · updated ${ageSeconds < 10 ? 'just now' : `${ageSeconds}s ago`}`);
+    followingRange && (followingRange.textContent = formatRange(routeArrivals.following));
+    followingDetail && (followingDetail.textContent = 'Next circuit · estimate');
+  });
   if (unavailable) {
     updateShuttleMarker(null);
-    const fallback = scheduleFallback();
-    nextRange && (nextRange.textContent = '—');
-    nextDetail && (nextDetail.textContent = 'Live ETA unavailable');
-    followingRange && (followingRange.textContent = fallback.minutes === undefined ? '—' : `${fallback.minutes} min`);
-    followingDetail && (followingDetail.textContent = fallback.time
-      ? `Scheduled ${fallback.time}`
-      : fallback.status);
     return;
   }
   updateShuttleMarker(estimate);
-  const arrivals = estimate.arrivals[destinationIndex === 0 ? 'current' : 'ssb'];
-  nextRange && (nextRange.textContent = formatRange(arrivals.next));
-  const ageSeconds = Math.max(0, Math.floor((Date.now() - estimate.updatedAt) / 1000));
-  nextDetail && (nextDetail.textContent = `Estimated · updated ${ageSeconds < 10 ? 'just now' : `${ageSeconds}s ago`}`);
-  followingRange && (followingRange.textContent = formatRange(arrivals.following));
-  followingDetail && (followingDetail.textContent = 'Next circuit · estimate');
 }
 
 function connectFeed() {
@@ -216,11 +241,13 @@ function stopSharing(status = 'Location sharing is off.') {
   permissionStatus = undefined;
   hasLocationFix = false;
   if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+  updateUserLocation(null);
   sessionId = undefined;
   rideDirection = undefined;
   sessionActivityAt = 0;
   latestReport = undefined;
   readings = [];
+  renderEstimate(lastEstimate);
   sharingButton && (sharingButton.textContent = 'Enable location for shared ETAs');
   sharingStatus && (sharingStatus.textContent = status);
   window.dispatchEvent(new CustomEvent('shuttle-location-sharing-change', { detail: false }));
@@ -241,9 +268,11 @@ function handleLocation(position: GeolocationPosition) {
     sessionActivityAt = 0;
     latestReport = undefined;
     readings = [];
+    renderEstimate(lastEstimate);
   }
   const { latitude, longitude, accuracy, speed } = position.coords;
   const point = { latitude, longitude };
+  updateUserLocation(point);
   if (accuracy > MAX_ACCURACY_METERS) {
     if (sharingStatus) sharingStatus.textContent = 'Location is on. Waiting for a more accurate reading…';
     return;
@@ -256,6 +285,7 @@ function handleLocation(position: GeolocationPosition) {
       rideDirection = undefined;
       sessionActivityAt = 0;
       latestReport = undefined;
+      renderEstimate(lastEstimate);
     }
     sharingStatus && (sharingStatus.textContent = 'Location is outside the shuttle corridor. Sharing is on; waiting near SSB or The Current.');
     readings = [];
@@ -300,6 +330,7 @@ function handleLocation(position: GeolocationPosition) {
       rideDirection = direction;
       sessionActivityAt = Date.now();
       sharingStatus && (sharingStatus.textContent = 'Likely shuttle ride detected. Sharing the estimated shuttle position.');
+      renderEstimate(lastEstimate);
       setDestination(direction === 'to-current' ? 0 : 1, true);
       connectFeed();
       lastSentAt = 0;
@@ -381,6 +412,6 @@ document.querySelectorAll<HTMLElement>('[data-corner]').forEach((element) => {
   observeResize(element, update);
 });
 
-void initializeMap().catch(() => {
-  console.warn('Apple Maps unavailable; map was not loaded.');
+void initializeMap().catch((error) => {
+  console.warn('Apple Maps unavailable; map was not loaded.', error);
 });

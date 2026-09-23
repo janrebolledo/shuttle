@@ -1,5 +1,28 @@
 let activeMap: mapkit.Map | undefined;
 let shuttleMarker: mapkit.MarkerAnnotation | undefined;
+let userMarker: mapkit.MarkerAnnotation | undefined;
+let userLocation: { latitude: number; longitude: number } | null = null;
+
+function syncUserMarker() {
+  if (!activeMap || !userLocation) {
+    if (activeMap && userMarker) activeMap.removeAnnotation(userMarker);
+    userMarker = undefined;
+    return;
+  }
+  const coordinate = new mapkit.Coordinate(userLocation.latitude, userLocation.longitude);
+  if (userMarker) userMarker.coordinate = coordinate;
+  else {
+    userMarker = new mapkit.MarkerAnnotation(coordinate, {
+      title: 'Your location', color: '#3478f6', glyphText: '•', calloutEnabled: false,
+    });
+    activeMap.addAnnotation(userMarker);
+  }
+}
+
+export function updateUserLocation(point: { latitude: number; longitude: number } | null) {
+  userLocation = point;
+  syncUserMarker();
+}
 
 export function updateShuttleMarker(point: { latitude: number; longitude: number } | null) {
   if (!activeMap || !point) {
@@ -35,21 +58,22 @@ export async function initializeMap() {
   const mapkit6 = mapkit as typeof mapkit & {
     load: (libraries: string[]) => Promise<typeof mapkit>;
   };
-  await mapkit6.load(['map']);
+  await mapkit6.load(['full-map']);
   const container = document.querySelector<HTMLElement>('#map')!;
   container.hidden = false;
   const section = container.parentElement!;
   // Reveal the map before constructing it so MapKit measures a visible canvas.
   section.classList.add('is-live');
   try {
+    const initialRegion = new mapkit.CoordinateRegion(
+      new mapkit.Coordinate(34.0615, -117.811),
+      new mapkit.CoordinateSpan(0.018, 0.023),
+    );
     activeMap = new mapkit.Map(container, {
-      region: new mapkit.CoordinateRegion(
-        new mapkit.Coordinate(34.0615, -117.811),
-        new mapkit.CoordinateSpan(0.018, 0.023),
-      ),
+      region: initialRegion,
       padding: new mapkit.Padding(0, 0, 540, 0),
-      isScrollEnabled: false,
-      isZoomEnabled: false,
+      isScrollEnabled: true,
+      isZoomEnabled: true,
       showsMapTypeControl: false,
       showsZoomControl: false,
       isRotationEnabled: false,
@@ -57,9 +81,16 @@ export async function initializeMap() {
         ColorScheme: { Light: string };
       }).ColorScheme.Light,
     });
+    const initialCameraDistance = activeMap.cameraDistance;
+    activeMap.setCameraBoundaryAnimated(initialRegion, false);
+    activeMap.cameraZoomRange = new mapkit.CameraZoomRange(
+      initialCameraDistance / 10,
+      initialCameraDistance,
+    );
   } catch (error) {
     section.classList.remove('is-live');
     throw error;
   }
+  syncUserMarker();
   // Keep Apple's attribution unobscured below the shared shuttle marker.
 }
