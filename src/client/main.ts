@@ -1,4 +1,6 @@
 import { generateClipPath, observeResize } from '@lisse/core';
+import { createDialKit, createDialRoot } from 'dialkit/vanilla';
+import 'dialkit/vanilla/styles.css';
 import { initializeMap, selectRoute, updateShuttleMarker, updateUserLocation } from './map';
 import { MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, distanceMeters, etaRange, getRoutePath, pointAtRouteProgress, routeLength, routePosition, scheduleFallback, stops, type Direction, type Point } from '../shuttle';
 import './alert-sheet';
@@ -198,6 +200,18 @@ let debugSimulation: 'waiting' | 'waiting-current' | Direction | null = null;
 let resumeLocationAfterDebug = false;
 let debugProgress = 0.5;
 let debugPlaybackTimer: ReturnType<typeof setInterval> | undefined;
+type RecordedLocation = Point & {
+  at: number; accuracy: number; altitude: number | null; heading: number | null; speed: number | null;
+  routeProgress: number; crossTrackMeters: number; accuracyAccepted: boolean; corridorAccepted: boolean;
+  appStatus: string; appDirection: Direction | 'none'; liveSession: boolean;
+};
+type TrackingMarker = { label: 'got on' | 'got off'; at: number; point?: Point; accuracy?: number; inferredDirection?: Direction };
+let debugRecording = false;
+let debugRecordingWatch: number | undefined;
+let debugRecordingStartedAt = 0;
+let debugRecordingStatus: HTMLOutputElement | undefined;
+let recordedLocations: RecordedLocation[] = [];
+let trackingMarkers: TrackingMarker[] = [];
 
 function formatRange(range: { min: number; max: number }) {
   return range.min === range.max ? `${range.min} min` : `${range.min}–${range.max} min`;
@@ -246,129 +260,277 @@ function renderEstimate(estimate: Estimate | null) {
 
 function setupLocationDebug() {
   if (!['localhost', '127.0.0.1', '::1'].includes(location.hostname) && !new URLSearchParams(location.search).has('debug')) return;
-  const toggle = document.createElement('button');
-  toggle.className = 'location-debug-toggle';
-  toggle.dataset.corner = '22';
-  toggle.type = 'button';
-  toggle.textContent = 'Debug';
-  toggle.setAttribute('aria-expanded', 'false');
-  toggle.setAttribute('aria-controls', 'location-debug-panel');
-  const panel = document.createElement('section');
-  panel.className = 'location-debug-panel';
-  panel.dataset.corner = '18';
-  panel.id = 'location-debug-panel';
-  panel.hidden = true;
-  panel.setAttribute('aria-label', 'Location simulation');
-  panel.innerHTML = '<strong>Simulate location</strong><button type="button" data-corner="10" data-simulate="waiting">Waiting at SSB</button><button type="button" data-corner="10" data-simulate="waiting-current">Waiting at The Current</button><button type="button" data-corner="10" data-simulate="to-current">On route to The Current</button><button type="button" data-corner="10" data-simulate="to-ssb">On route to Cal Poly Pomona</button><button type="button" data-corner="10" data-simulate="play-pause" hidden>Play simulation</button><button type="button" data-corner="10" data-simulate="off">Use device location</button>';
-  document.body.appendChild(toggle);
-  document.body.appendChild(panel);
-  toggle.addEventListener('click', () => {
-    panel.hidden = !panel.hidden;
-    toggle.setAttribute('aria-expanded', String(!panel.hidden));
+
+  debugRecordingStatus = document.createElement('output');
+  debugRecordingStatus.className = 'location-debug-status';
+  debugRecordingStatus.dataset.corner = '12';
+  debugRecordingStatus.setAttribute('aria-live', 'polite');
+  debugRecordingStatus.hidden = true;
+  document.body.appendChild(debugRecordingStatus);
+  const dialRoot = createDialRoot({ position: 'bottom-right', theme: 'light', productionEnabled: true });
+  const surfaceObserver = new MutationObserver(() => requestAnimationFrame(() => shapeDialkitSurfaces(dialRoot.element)));
+  surfaceObserver.observe(dialRoot.element, { childList: true, subtree: true });
+
+  const dial = createDialKit('Shuttle debug', {
+    simulation: {
+      waitingAtSsb: { type: 'action', label: 'Wait at SSB' },
+      waitingAtCurrent: { type: 'action', label: 'Wait at The Current' },
+      toCurrent: { type: 'action', label: 'On route to The Current' },
+      toSsb: { type: 'action', label: 'On route to Cal Poly Pomona' },
+      playPause: { type: 'action', label: 'Play or pause simulation' },
+      useDeviceLocation: { type: 'action', label: 'Use device location' },
+    },
+    realTracking: {
+      recordLocation: false,
+      gotOn: { type: 'action', label: 'Got on' },
+      gotOff: { type: 'action', label: 'Got off' },
+      exportLog: { type: 'action', label: 'Export tracking TXT' },
+    },
+  }, {
+    id: 'shuttle-live-tracking-debug',
+    defaultCollapsed: true,
+    onAction: (action) => handleDebugAction(action),
   });
-  panel.addEventListener('click', (event) => {
-    const button = (event.target as Element).closest<HTMLButtonElement>('[data-simulate]');
-    if (!button) return;
-    const mode = button.dataset.simulate;
-    if (mode === 'play-pause') {
-      if (debugPlaybackTimer) {
-        clearInterval(debugPlaybackTimer);
-        debugPlaybackTimer = undefined;
-        button.textContent = 'Play simulation';
-      } else if (debugSimulation === 'to-current' || debugSimulation === 'to-ssb') {
-        const direction = debugSimulation;
-        if (debugProgress === (direction === 'to-current' ? 1 : 0)) debugProgress = direction === 'to-current' ? 0 : 1;
-        button.textContent = 'Pause simulation';
-        const routeLengthMeters = routeLength();
-        debugPlaybackTimer = setInterval(() => {
-          debugProgress = Math.max(0, Math.min(1, debugProgress + (direction === 'to-current' ? 1 : -1) * 8 / routeLengthMeters));
-          const point = pointAtRouteProgress(debugProgress);
-          updateUserLocation(point, true);
-          const arrivals = {
-            ssb: etaRange(point, direction, 'ssb', 8),
-            current: etaRange(point, direction, 'current', 8),
-          };
-          renderEstimate({ ...point, direction, updatedAt: Date.now(), contributors: 1, arrivals });
-          latestReport = makeDebugReading(point);
-          sendReport(latestReport);
-          if (debugProgress === (direction === 'to-current' ? 1 : 0)) {
-            clearInterval(debugPlaybackTimer);
-            debugPlaybackTimer = undefined;
-            button.textContent = 'Play simulation';
-          }
-        }, 1_000);
-      }
-      return;
-    }
-    if (mode === 'off') {
-      if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
-      debugPlaybackTimer = undefined;
-      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
-      const resume = resumeLocationAfterDebug;
-      debugSimulation = null;
-      resumeLocationAfterDebug = false;
-      sessionId = undefined;
-      rideDirection = undefined;
-      latestReport = undefined;
-      readings = [];
-      updateUserLocation(null);
-      renderEstimate(null);
-      panel.querySelector<HTMLButtonElement>('[data-simulate="play-pause"]')!.hidden = true;
-      sharingStatus && (sharingStatus.textContent = 'Location simulation is off.');
-      if (resume) startSharing();
-      return;
-    }
-    if (!debugSimulation) {
-      resumeLocationAfterDebug = locationWatch !== undefined;
-      if (locationWatch !== undefined) navigator.geolocation.clearWatch(locationWatch);
-      if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
-      locationWatch = undefined;
-      locationWaitTimer = undefined;
-    }
-    debugSimulation = mode as 'waiting' | 'waiting-current' | Direction;
-    if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
-    debugPlaybackTimer = undefined;
-    const playback = panel.querySelector<HTMLButtonElement>('[data-simulate="play-pause"]')!;
-    const waiting = debugSimulation === 'waiting' || debugSimulation === 'waiting-current';
-    playback.hidden = waiting;
-    playback.textContent = 'Play simulation';
-    readings = [];
-    latestReport = undefined;
-    if (waiting) debugProgress = mode === 'waiting-current' ? 1 : 0;
-    else {
-      const direction = mode as Direction;
-      setDestination(direction === 'to-current' ? 0 : 1, true);
-      debugProgress = direction === 'to-current' ? 0 : 1;
-    }
-    const point = waiting ? (mode === 'waiting-current' ? stops.current : stops.ssb) : pointAtRouteProgress(debugProgress);
-    updateUserLocation(point);
-    if (waiting) {
-      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
-      sessionId = undefined;
-      rideDirection = undefined;
-      latestReport = undefined;
-      renderEstimate(null);
-      sharingStatus && (sharingStatus.textContent = mode === 'waiting-current'
-        ? 'Simulating a user waiting at The Current.'
-        : 'Simulating a user waiting at SSB.');
-    } else {
-      const direction = mode as Direction;
-      if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
-      sessionId = crypto.randomUUID();
-      rideDirection = direction;
-      updateUserLocation(point, true);
-      const routeEstimate = etaRange(point, direction, 'ssb', 7);
-      const currentEstimate = etaRange(point, direction, 'current', 7);
-      renderEstimate({ ...point, direction, updatedAt: Date.now(), contributors: 1, arrivals: { ssb: routeEstimate, current: currentEstimate } });
-      latestReport = makeDebugReading(point);
-      lastSentAt = 0;
-      connectFeed();
-      sendReport(latestReport);
-      sharingStatus && (sharingStatus.textContent = `Simulating a user on route to ${direction === 'to-current' ? 'The Current' : 'Cal Poly Pomona'}.`);
-    }
+  shapeDialkitSurfaces(dialRoot.element);
+
+  let previousRecordingValue = false;
+  dial.subscribe((values) => {
+    if (values.realTracking.recordLocation === previousRecordingValue) return;
+    previousRecordingValue = values.realTracking.recordLocation;
+    if (previousRecordingValue) startDebugLocationRecording();
+    else stopDebugLocationRecording();
   });
 }
 
+function shapeDialkitSurfaces(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('*').forEach((element) => {
+    if (element.hasAttribute('data-corner')) return;
+    const style = getComputedStyle(element);
+    if (!parseFloat(style.borderTopLeftRadius)) return;
+    if (style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.backgroundImage === 'none') return;
+    element.dataset.corner = style.borderTopLeftRadius.includes('%') ? 'round' : String(parseFloat(style.borderTopLeftRadius));
+  });
+}
+
+function handleDebugAction(action: string) {
+  const simulation: Record<string, string> = {
+    'simulation.waitingAtSsb': 'waiting',
+    'simulation.waitingAtCurrent': 'waiting-current',
+    'simulation.toCurrent': 'to-current',
+    'simulation.toSsb': 'to-ssb',
+    'simulation.useDeviceLocation': 'off',
+  };
+
+  if (action === 'simulation.playPause') {
+    if (debugPlaybackTimer) {
+      clearInterval(debugPlaybackTimer);
+      debugPlaybackTimer = undefined;
+      setDebugRecordingStatus('Simulation paused.');
+    } else if (debugSimulation === 'to-current' || debugSimulation === 'to-ssb') {
+      const direction = debugSimulation;
+      if (debugProgress === (direction === 'to-current' ? 1 : 0)) debugProgress = direction === 'to-current' ? 0 : 1;
+      const routeLengthMeters = routeLength();
+      debugPlaybackTimer = setInterval(() => {
+        debugProgress = Math.max(0, Math.min(1, debugProgress + (direction === 'to-current' ? 1 : -1) * 8 / routeLengthMeters));
+        const point = pointAtRouteProgress(debugProgress);
+        updateUserLocation(point, true);
+        renderEstimate({
+          ...point, direction, updatedAt: Date.now(), contributors: 1,
+          arrivals: { ssb: etaRange(point, direction, 'ssb', 8), current: etaRange(point, direction, 'current', 8) },
+        });
+        latestReport = makeDebugReading(point);
+        sendReport(latestReport);
+        if (debugProgress === (direction === 'to-current' ? 1 : 0)) {
+          clearInterval(debugPlaybackTimer);
+          debugPlaybackTimer = undefined;
+          setDebugRecordingStatus('Simulation complete.');
+        }
+      }, 1_000);
+      setDebugRecordingStatus('Simulation is playing.');
+    }
+    return;
+  }
+
+  if (action === 'realTracking.gotOn' || action === 'realTracking.gotOff') {
+    if (!debugRecording) {
+      setDebugRecordingStatus('Start recording before marking boarding or exiting.');
+      return;
+    }
+    const latest = recordedLocations.at(-1);
+    const marker: TrackingMarker = {
+      label: action.endsWith('gotOn') ? 'got on' : 'got off',
+      at: Date.now(),
+      ...(latest ? { point: { latitude: latest.latitude, longitude: latest.longitude }, accuracy: latest.accuracy } : {}),
+      ...(rideDirection ? { inferredDirection: rideDirection } : {}),
+    };
+    trackingMarkers.push(marker);
+    setDebugRecordingStatus(`Marked ${marker.label}. ${recordedLocations.length} GPS readings captured.`);
+    return;
+  }
+
+  if (action === 'realTracking.exportLog') {
+    exportTrackingLog();
+    return;
+  }
+
+  const mode = simulation[action];
+  if (!mode) return;
+  if (mode === 'off') {
+    if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
+    debugPlaybackTimer = undefined;
+    if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+    const resume = resumeLocationAfterDebug;
+    debugSimulation = null;
+    resumeLocationAfterDebug = false;
+    sessionId = undefined;
+    rideDirection = undefined;
+    latestReport = undefined;
+    readings = [];
+    updateUserLocation(null);
+    renderEstimate(null);
+    sharingStatus && (sharingStatus.textContent = 'Location simulation is off.');
+    if (resume) startSharing();
+    setDebugRecordingStatus(debugRecording ? 'Real location recording is active.' : 'Location simulation is off.');
+    return;
+  }
+
+  if (!debugSimulation) {
+    resumeLocationAfterDebug = locationWatch !== undefined;
+    if (locationWatch !== undefined) navigator.geolocation.clearWatch(locationWatch);
+    if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
+    locationWatch = undefined;
+    locationWaitTimer = undefined;
+  }
+  debugSimulation = mode as 'waiting' | 'waiting-current' | Direction;
+  if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
+  debugPlaybackTimer = undefined;
+  readings = [];
+  latestReport = undefined;
+  const waiting = debugSimulation === 'waiting' || debugSimulation === 'waiting-current';
+  if (waiting) debugProgress = mode === 'waiting-current' ? 1 : 0;
+  else {
+    const direction = mode as Direction;
+    setDestination(direction === 'to-current' ? 0 : 1, true);
+    debugProgress = direction === 'to-current' ? 0 : 1;
+  }
+  const point = waiting ? (mode === 'waiting-current' ? stops.current : stops.ssb) : pointAtRouteProgress(debugProgress);
+  updateUserLocation(point);
+  if (waiting) {
+    if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+    sessionId = undefined;
+    rideDirection = undefined;
+    latestReport = undefined;
+    renderEstimate(null);
+    sharingStatus && (sharingStatus.textContent = mode === 'waiting-current'
+      ? 'Simulating a user waiting at The Current.'
+      : 'Simulating a user waiting at SSB.');
+  } else {
+    const direction = mode as Direction;
+    if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+    sessionId = crypto.randomUUID();
+    rideDirection = direction;
+    updateUserLocation(point, true);
+    renderEstimate({
+      ...point, direction, updatedAt: Date.now(), contributors: 1,
+      arrivals: { ssb: etaRange(point, direction, 'ssb', 7), current: etaRange(point, direction, 'current', 7) },
+    });
+    latestReport = makeDebugReading(point);
+    lastSentAt = 0;
+    connectFeed();
+    sendReport(latestReport);
+    sharingStatus && (sharingStatus.textContent = `Simulating a user on route to ${direction === 'to-current' ? 'The Current' : 'Cal Poly Pomona'}.`);
+  }
+  setDebugRecordingStatus(waiting ? 'Location simulation is waiting at a stop.' : 'Location simulation is ready.');
+}
+
+function setDebugRecordingStatus(message: string) {
+  if (!debugRecordingStatus) return;
+  debugRecordingStatus.textContent = message;
+  debugRecordingStatus.hidden = false;
+}
+
+function startDebugLocationRecording() {
+  if (!navigator.geolocation) {
+    setDebugRecordingStatus('This browser does not provide device location.');
+    return;
+  }
+  recordedLocations = [];
+  trackingMarkers = [];
+  debugRecordingStartedAt = Date.now();
+  debugRecording = true;
+  setDebugRecordingStatus('Requesting location access. Readings stay in this tab until you export them.');
+  debugRecordingWatch = navigator.geolocation.watchPosition((position) => {
+    if (!debugRecording) return;
+    if (recordedLocations.length >= 10_000) {
+      if (debugRecordingWatch !== undefined) navigator.geolocation?.clearWatch(debugRecordingWatch);
+      debugRecordingWatch = undefined;
+      debugRecording = false;
+      setDebugRecordingStatus('Reached the 10,000 reading limit. Export the log before starting another recording.');
+      return;
+    }
+    const { latitude, longitude, accuracy, altitude, heading, speed } = position.coords;
+    const point = { latitude, longitude };
+    const route = routePosition(point);
+    recordedLocations.push({
+      ...point, at: position.timestamp || Date.now(), accuracy, altitude, heading, speed,
+      routeProgress: route.progress, crossTrackMeters: route.crossTrackMeters,
+      accuracyAccepted: accuracy <= MAX_ACCURACY_METERS,
+      corridorAccepted: route.crossTrackMeters <= ROUTE_WIDTH_METERS && route.rawProgress >= -0.1 && route.rawProgress <= 1.1,
+      appStatus: sharingStatus?.textContent ?? 'unavailable',
+      appDirection: rideDirection ?? 'none', liveSession: Boolean(sessionId),
+    });
+    setDebugRecordingStatus(`Recording on this device · ${recordedLocations.length} GPS readings.`);
+  }, (error) => {
+    setDebugRecordingStatus(`Location error (${error.code}): ${error.message}`);
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 });
+}
+
+function stopDebugLocationRecording() {
+  debugRecording = false;
+  if (debugRecordingWatch !== undefined) navigator.geolocation?.clearWatch(debugRecordingWatch);
+  debugRecordingWatch = undefined;
+  if (recordedLocations.length) setDebugRecordingStatus(`Recording stopped · ${recordedLocations.length} GPS readings ready to export.`);
+  else setDebugRecordingStatus('Recording stopped. No GPS readings were captured.');
+}
+
+function exportTrackingLog() {
+  if (!recordedLocations.length) {
+    setDebugRecordingStatus('There are no GPS readings to export yet.');
+    return;
+  }
+  const rows = [
+    'Shuttle live tracking debug capture',
+    `Started: ${new Date(debugRecordingStartedAt).toISOString()}`,
+    `Exported: ${new Date().toISOString()}`,
+    `Page: ${location.origin}${location.pathname}`,
+    `Browser: ${navigator.userAgent}`,
+    `GPS readings: ${recordedLocations.length}`,
+    '',
+    'EVENTS',
+    ...trackingMarkers.map((marker) => [
+      `${new Date(marker.at).toISOString()} · ${marker.label}`,
+      marker.point ? `  latitude=${marker.point.latitude} longitude=${marker.point.longitude} accuracy=${marker.accuracy}m` : '  location=unavailable',
+      marker.inferredDirection ? `  appDirection=${marker.inferredDirection}` : '  appDirection=not detected',
+    ].join('\n')),
+    '',
+    'GPS READINGS',
+    'timestamp,latitude,longitude,accuracy_m,altitude_m,heading_deg,speed_mps,route_progress,cross_track_m,accuracy_accepted,corridor_accepted,app_direction,live_session,app_status',
+    ...recordedLocations.map((point) => [
+      new Date(point.at).toISOString(), point.latitude, point.longitude, point.accuracy,
+      point.altitude ?? '', point.heading ?? '', point.speed ?? '', point.routeProgress,
+      point.crossTrackMeters, point.accuracyAccepted, point.corridorAccepted, point.appDirection,
+      point.liveSession, JSON.stringify(point.appStatus),
+    ].join(',')),
+  ];
+  const blob = new Blob([rows.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `shuttle-tracking-${new Date(debugRecordingStartedAt).toISOString().replaceAll(':', '-')}.txt`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  setDebugRecordingStatus(`Exported ${recordedLocations.length} GPS readings. The file contains precise location history.`);
+}
 function connectFeed() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);

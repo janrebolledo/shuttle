@@ -7,6 +7,7 @@
       "dependencies": {
         "@lisse/core": "^0.7.2",
         "@silk-hq/components": "0.10.1",
+        "dialkit": "2.0.2",
         "hono": "^4.13.8",
         "motion": "^13.4.0",
         "react": "^19.3.0",
@@ -186,6 +187,8 @@
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 
     "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
+
+    "dialkit": ["dialkit@2.0.2", "", { "peerDependencies": { "motion": ">=11.0.0", "motion-v": ">=2.0.0", "react": ">=18.0.0", "react-dom": ">=18.0.0", "solid-js": ">=1.6.0", "svelte": ">=5.8.0", "vue": ">=3.3.0" }, "optionalPeers": ["motion", "motion-v", "react", "react-dom", "solid-js", "svelte", "vue"] }, "sha512-D5ZFLBhcB8WVxI6Q8e7HuPPA4SKQBPfLHpvgZQ5V0ZrqohHjYjTR5JoLfXSCeN8tKvUdemyGnVHy/3EtsaliUw=="],
 
     "error-stack-parser-es": ["error-stack-parser-es@1.0.5", "", {}, "sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA=="],
 

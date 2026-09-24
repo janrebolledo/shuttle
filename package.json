@@ -13,6 +13,7 @@
   "dependencies": {
     "@lisse/core": "^0.7.2",
     "@silk-hq/components": "0.10.1",
+    "dialkit": "2.0.2",
     "hono": "^4.13.8",
     "motion": "^13.4.0",
     "react": "^19.3.0",
