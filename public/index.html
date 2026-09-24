@@ -21,10 +21,17 @@
         <div class="map-gradient" aria-hidden="true"></div>
         <div class="map-toolbar">
           <div class="map-context">
-            <div class="route-switcher" role="group" aria-label="Selected shuttle route">
+            <button class="route-switcher" id="campus-switcher" type="button" data-corner="20" aria-label="Campus: The Current. Change campus" aria-haspopup="menu" aria-expanded="false" aria-controls="campus-menu">
               <span>The Current</span>
               <span class="icon icon--route" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" /></svg></span>
               <span>Cal Poly</span>
+              <span class="icon icon--switcher-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5" /></svg></span>
+            </button>
+            <div class="campus-menu" id="campus-menu" data-corner="16" role="menu" aria-label="Choose a campus" hidden>
+              <button type="button" data-corner="10" role="menuitemradio" aria-checked="true" data-campus-option="The Current">The Current<span aria-hidden="true">✓</span></button>
+              <button type="button" data-corner="10" role="menuitem" disabled>The Village</button>
+              <button type="button" data-corner="10" role="menuitem" disabled>Main Campus</button>
+              <button type="button" data-corner="10" role="menuitem" disabled>Metro Link</button>
             </div>
           </div>
           <div class="map-actions">
@@ -33,9 +40,9 @@
           </div>
         </div>
       </section>
-      <section class="arrivals" aria-label="Shuttle arrivals">
+      <section class="arrivals" data-corner="28 28 0 0" data-lisse-direct aria-label="Shuttle arrivals">
         <div class="sheet-grabber">
-          <button class="sheet-handle" type="button" aria-label="Expand arrivals" aria-expanded="false" aria-controls="destination"></button>
+          <button class="sheet-handle" data-corner="5" type="button" aria-label="Expand arrivals" aria-expanded="false" aria-controls="destination"></button>
         </div>
         <header class="destination">
           <button class="page-indicator" type="button" aria-label="Change destination, currently 1 of 2: The Current" aria-controls="arrival-carousel">

@@ -2,6 +2,8 @@ import { setRoutePath, stops, type Point } from '../shuttle';
 
 let activeMap: mapkit.Map | undefined;
 let shuttleMarker: mapkit.Annotation | undefined;
+let shuttleMarkerElement: HTMLDivElement | undefined;
+let shuttleSignalAvailable = true;
 let userMarker: mapkit.MarkerAnnotation | undefined;
 let routeOverlays: mapkit.PolylineOverlay[][] = [];
 let routePaths: Point[][] = [];
@@ -32,10 +34,10 @@ export function updateUserLocation(point: { latitude: number; longitude: number 
   syncUserMarker();
 }
 
-export function updateShuttleMarker(point: { latitude: number; longitude: number } | null) {
+export function updateShuttleMarker(point: { latitude: number; longitude: number } | null, signalAvailable = true) {
+  shuttleSignalAvailable = signalAvailable;
   if (!activeMap || !point) {
-    if (activeMap && shuttleMarker) activeMap.removeAnnotation(shuttleMarker);
-    shuttleMarker = undefined;
+    if (shuttleMarkerElement) shuttleMarkerElement.style.filter = signalAvailable ? '' : 'grayscale(1) opacity(0.5)';
     return;
   }
   const coordinate = new mapkit.Coordinate(point.latitude, point.longitude);
@@ -43,12 +45,15 @@ export function updateShuttleMarker(point: { latitude: number; longitude: number
   else {
     shuttleMarker = new mapkit.Annotation(coordinate, () => {
       const marker = document.createElement('div');
+      shuttleMarkerElement = marker;
       marker.textContent = '🚐';
+      marker.dataset.corner = '12';
       Object.assign(marker.style, {
         width: '36px', height: '36px', display: 'grid', placeItems: 'center',
         boxSizing: 'border-box', border: '0.5px solid rgba(230, 227, 221, 0.5)',
-        borderRadius: '12px', background: 'rgba(255, 255, 255, 0.92)',
+        background: 'rgba(255, 255, 255, 0.92)',
         boxShadow: '0 2px 2px rgba(91, 79, 62, 0.25)', fontSize: '16px',
+        filter: shuttleSignalAvailable ? '' : 'grayscale(1) opacity(0.5)',
       });
       return marker;
     }, {
@@ -57,6 +62,7 @@ export function updateShuttleMarker(point: { latitude: number; longitude: number
     });
     activeMap.addAnnotation(shuttleMarker);
   }
+  if (shuttleMarkerElement) shuttleMarkerElement.style.filter = signalAvailable ? '' : 'grayscale(1) opacity(0.5)';
 }
 
 export function selectRoute(direction: 'to-current' | 'to-ssb') {
@@ -65,8 +71,17 @@ export function selectRoute(direction: 'to-current' | 'to-ssb') {
   if (!activeMap || !routePaths[index]) return;
   for (const overlay of displayedOverlays) activeMap.removeOverlay(overlay);
   setRoutePath(routePaths[index]!);
-  displayedOverlays = routeOverlays[index]!;
-  for (const overlay of displayedOverlays) activeMap.addOverlay(overlay);
+  displayedOverlays = [];
+  for (const groupIndex of [1 - index, index]) {
+    for (const overlay of routeOverlays[groupIndex]!) {
+      const selected = groupIndex === index;
+      overlay.style.strokeColor = selected ? '#3478f6' : '#a9c9ff';
+      overlay.style.strokeOpacity = selected ? 0.95 : 0.72;
+      overlay.style.lineWidth = selected ? 6 : 5;
+      activeMap.addOverlay(overlay);
+      displayedOverlays.push(overlay);
+    }
+  }
 }
 
 export async function initializeMap() {
@@ -138,6 +153,7 @@ export async function initializeMap() {
       ]).then(([toCurrent, toCpp]) => {
         if (id !== requestId || !activeMap || toCurrent.some((route) => !route) || toCpp.some((route) => !route)) return;
         for (const overlay of displayedOverlays) activeMap.removeOverlay(overlay);
+        displayedOverlays = [];
         const currentRoutes = toCurrent as mapkit.Route[];
         const cppRoutes = toCpp as mapkit.Route[];
         const compactPath = (routes: mapkit.Route[], reverse = false) => {
@@ -150,9 +166,6 @@ export async function initializeMap() {
         routeOverlays = [currentRoutes, cppRoutes].map((routes) => routes.map(({ polyline }) => polyline));
         routePaths = [compactPath(currentRoutes), compactPath(cppRoutes, true)];
         for (const overlays of routeOverlays) for (const overlay of overlays) {
-          overlay.style.strokeColor = '#3478f6';
-          overlay.style.strokeOpacity = 0.9;
-          overlay.style.lineWidth = 6;
           overlay.style.lineCap = 'round';
           overlay.style.lineJoin = 'round';
         }

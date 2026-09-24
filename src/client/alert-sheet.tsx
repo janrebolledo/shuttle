@@ -41,18 +41,18 @@ function AlertSheet() {
       presented={presented}
       onPresentedChange={setPresented}
     >
-      <Sheet.Trigger className="report-button" aria-label="Report a service alert">
+      <Sheet.Trigger className="report-button" data-corner="24" aria-label="Report a service alert">
         <img className="icon--report" src="/assets/icons/exclamationmark.bubble.fill.svg" alt="" />
       </Sheet.Trigger>
       <Sheet.Portal>
         <Sheet.View className="alert-view" contentPlacement="bottom" tracks="bottom">
           <Sheet.Backdrop className="alert-backdrop" />
-          <Sheet.Content className="alert-content">
+          <Sheet.Content className="alert-content" data-corner="30 30 0 0" data-lisse-direct>
             <Sheet.BleedingBackground className="alert-background" />
             <div className="alert-sheet">
-              <div className="alert-handle" aria-hidden="true" />
+              <div className="alert-handle" data-corner="4" aria-hidden="true" />
               <header className="alert-header">
-                <Sheet.Trigger className="alert-close" action="dismiss" aria-label="Close alert options">
+                <Sheet.Trigger className="alert-close" data-corner="round" action="dismiss" aria-label="Close alert options">
                   <span className="icon icon--close" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="m12 19-7-7 7-7" />
@@ -65,7 +65,7 @@ function AlertSheet() {
                 </div>
                 <span aria-hidden="true" />
               </header>
-              <div className="alert-options" role="group" aria-label="Choose an alert">
+              <div className="alert-options" data-corner="24" role="group" aria-label="Choose an alert">
                 {alerts.map(([value, label, icon]) => (
                   <button
                     key={value}

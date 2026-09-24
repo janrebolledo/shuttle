@@ -10,14 +10,50 @@ const arrivals = document.querySelector<HTMLElement>('.arrivals');
 const arrivalCarousel = document.querySelector<HTMLElement>('.arrival-carousel');
 const sheetHandle = document.querySelector<HTMLButtonElement>('.sheet-handle');
 const mapSection = document.querySelector<HTMLElement>('.map-section');
+const campusSwitcher = document.querySelector<HTMLButtonElement>('#campus-switcher');
+const campusMenu = document.querySelector<HTMLElement>('#campus-menu');
 const sharingButton = document.querySelector<HTMLButtonElement>('#sharing-button');
 const sharingStatus = document.querySelector<HTMLElement>('#sharing-status');
 const destinations = ['the current', 'cal poly pomona'];
 let destinationIndex = 0;
+let destinationScrollTarget: number | undefined;
 let routeChosenManually = false;
+
+function setCampusMenuOpen(open: boolean) {
+  if (!campusSwitcher || !campusMenu) return;
+  campusMenu.hidden = !open;
+  campusSwitcher.setAttribute('aria-expanded', String(open));
+  if (open) campusMenu.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+}
+
+campusSwitcher?.addEventListener('click', () => {
+  setCampusMenuOpen(campusMenu?.hidden ?? true);
+});
+campusMenu?.addEventListener('click', (event) => {
+  if ((event.target as Element).closest('[data-campus-option]')) {
+    setCampusMenuOpen(false);
+    campusSwitcher?.focus({ preventScroll: true });
+  }
+});
+campusMenu?.addEventListener('keydown', (event) => {
+  const options = [...campusMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+  const index = options.indexOf(document.activeElement as HTMLButtonElement);
+  const next = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : -1;
+  if (next >= 0) {
+    event.preventDefault();
+    options[(next + options.length) % options.length]?.focus();
+  } else if (event.key === 'Escape') {
+    setCampusMenuOpen(false);
+    campusSwitcher?.focus();
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!campusMenu?.hidden && !(event.target as Element | null)?.closest('#campus-switcher, #campus-menu')) setCampusMenuOpen(false);
+});
 
 function setSheetExpanded(expanded: boolean) {
   arrivals?.classList.toggle('is-expanded', expanded);
+  if (arrivals) arrivals.dataset.corner = expanded ? '0 0 0 0' : '28 28 0 0';
   sheetHandle?.setAttribute('aria-expanded', String(expanded));
   sheetHandle?.setAttribute('aria-label', expanded ? 'Collapse arrivals' : 'Expand arrivals');
 }
@@ -65,7 +101,7 @@ function finishSheetDrag(event: PointerEvent) {
 sheetHandle?.addEventListener('pointerup', finishSheetDrag);
 sheetHandle?.addEventListener('pointercancel', finishSheetDrag);
 
-function setDestination(index: number, automatic = false) {
+function setDestination(index: number, automatic = false, scroll = true) {
   if (!automatic) routeChosenManually = true;
   const destination = destinations[index];
   if (!destinationButton || !destinationDots || !destination || index === destinationIndex) return;
@@ -73,10 +109,13 @@ function setDestination(index: number, automatic = false) {
   destinationIndex = index;
   selectRoute(index === 0 ? 'to-current' : 'to-ssb');
   renderEstimate(lastEstimate);
-  arrivalCarousel?.scrollTo({
-    left: index * arrivalCarousel.clientWidth,
-    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-  });
+  if (scroll && arrivalCarousel) {
+    destinationScrollTarget = index;
+    arrivalCarousel.scrollTo({
+      left: index * arrivalCarousel.clientWidth,
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }
   destinationButton.setAttribute('aria-label', `Change destination, currently ${index + 1} of 2: ${destination}`);
   destinationDots.forEach((dot, dotIndex) => dot.classList.toggle('is-active', dotIndex === index));
 }
@@ -91,20 +130,23 @@ destinationButton?.addEventListener('click', (event) => {
   setDestination(1 - destinationIndex);
 });
 
-let arrivalScrollTimer: ReturnType<typeof setTimeout> | undefined;
 function syncDestinationFromCarousel() {
   if (!arrivalCarousel?.clientWidth) return;
   const index = Math.round(arrivalCarousel.scrollLeft / arrivalCarousel.clientWidth);
-  if (index !== destinationIndex) setDestination(index);
+  if (destinationScrollTarget !== undefined) {
+    if (index !== destinationScrollTarget) return;
+    destinationScrollTarget = undefined;
+  }
+  if (index !== destinationIndex) setDestination(index, false, false);
 }
-arrivalCarousel?.addEventListener('scroll', () => {
-  if (arrivalScrollTimer) clearTimeout(arrivalScrollTimer);
-  arrivalScrollTimer = setTimeout(syncDestinationFromCarousel, 300);
-}, { passive: true });
+arrivalCarousel?.addEventListener('scroll', syncDestinationFromCarousel, { passive: true });
 arrivalCarousel?.addEventListener('scrollend', () => {
-  if (arrivalScrollTimer) clearTimeout(arrivalScrollTimer);
+  destinationScrollTarget = undefined;
   syncDestinationFromCarousel();
 });
+arrivalCarousel?.addEventListener('pointerdown', () => { destinationScrollTarget = undefined; }, { passive: true });
+arrivalCarousel?.addEventListener('wheel', () => { destinationScrollTarget = undefined; }, { passive: true });
+arrivalCarousel?.addEventListener('keydown', () => { destinationScrollTarget = undefined; });
 
 function enableRouteSwipe(surface: HTMLElement | null, capture = false) {
   let swipeStart: { x: number; y: number; pointerId: number; target: EventTarget | null } | undefined;
@@ -161,6 +203,11 @@ function formatRange(range: { min: number; max: number }) {
   return range.min === range.max ? `${range.min} min` : `${range.min}–${range.max} min`;
 }
 
+function formatEta(range: { min: number; max: number }) {
+  const minutes = Math.round((range.min + range.max) / 2);
+  return `${new Date(Date.now() + minutes * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' })} ETA`;
+}
+
 function renderEstimate(estimate: Estimate | null) {
   lastEstimate = estimate;
   const unavailable = !estimate || Date.now() - estimate.updatedAt > 75_000;
@@ -184,15 +231,14 @@ function renderEstimate(estimate: Estimate | null) {
     const routeArrivals = estimate.arrivals[index === 0 ? 'current' : 'ssb'];
     const onThisLeg = sessionId && rideDirection === (index === 0 ? 'to-current' : 'to-ssb');
     nextRange && (nextRange.textContent = onThisLeg ? 'on shuttle' : formatRange(routeArrivals.next));
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - estimate.updatedAt) / 1000));
     nextDetail && (nextDetail.textContent = onThisLeg
       ? 'You’re riding this shuttle.'
-      : `Estimated · updated ${ageSeconds < 10 ? 'just now' : `${ageSeconds}s ago`}`);
+      : formatEta(routeArrivals.next));
     followingRange && (followingRange.textContent = formatRange(routeArrivals.following));
     followingDetail && (followingDetail.textContent = 'Next circuit · estimate');
   });
   if (unavailable) {
-    updateShuttleMarker(null);
+    updateShuttleMarker(null, false);
     return;
   }
   updateShuttleMarker(estimate);
@@ -202,16 +248,18 @@ function setupLocationDebug() {
   if (!['localhost', '127.0.0.1', '::1'].includes(location.hostname) && !new URLSearchParams(location.search).has('debug')) return;
   const toggle = document.createElement('button');
   toggle.className = 'location-debug-toggle';
+  toggle.dataset.corner = '22';
   toggle.type = 'button';
   toggle.textContent = 'Debug';
   toggle.setAttribute('aria-expanded', 'false');
   toggle.setAttribute('aria-controls', 'location-debug-panel');
   const panel = document.createElement('section');
   panel.className = 'location-debug-panel';
+  panel.dataset.corner = '18';
   panel.id = 'location-debug-panel';
   panel.hidden = true;
   panel.setAttribute('aria-label', 'Location simulation');
-  panel.innerHTML = '<strong>Simulate location</strong><button type="button" data-simulate="waiting">Waiting at SSB</button><button type="button" data-simulate="waiting-current">Waiting at The Current</button><button type="button" data-simulate="to-current">On route to The Current</button><button type="button" data-simulate="to-ssb">On route to Cal Poly Pomona</button><button type="button" data-simulate="play-pause" hidden>Play simulation</button><button type="button" data-simulate="off">Use device location</button>';
+  panel.innerHTML = '<strong>Simulate location</strong><button type="button" data-corner="10" data-simulate="waiting">Waiting at SSB</button><button type="button" data-corner="10" data-simulate="waiting-current">Waiting at The Current</button><button type="button" data-corner="10" data-simulate="to-current">On route to The Current</button><button type="button" data-corner="10" data-simulate="to-ssb">On route to Cal Poly Pomona</button><button type="button" data-corner="10" data-simulate="play-pause" hidden>Play simulation</button><button type="button" data-corner="10" data-simulate="off">Use device location</button>';
   document.body.appendChild(toggle);
   document.body.appendChild(panel);
   toggle.addEventListener('click', () => {
@@ -528,18 +576,89 @@ setupLocationDebug();
 connectFeed();
 setInterval(() => renderEstimate(lastEstimate), 15_000);
 
-// Lisse (corne.rs) maintains continuous corners across viewport sizes.
-document.querySelectorAll<HTMLElement>('[data-corner]').forEach((element) => {
-  const update = () => {
-    const { width, height } = element.getBoundingClientRect();
-    if (!width || !height) return;
-    element.style.clipPath = generateClipPath(width, height, {
-      radius: Number(element.dataset.corner), smoothing: 0.6,
-    });
-  };
+// Shape only the surface so Lisse never crops icons, text, or controls.
+const lisseCornerUpdates = new WeakMap<HTMLElement, () => void>();
+function applyLisseCorner(element: HTMLElement) {
+  let update = lisseCornerUpdates.get(element);
+  if (!update) {
+    const direct = element.hasAttribute('data-lisse-direct');
+    const surface = direct ? undefined : document.createElement('div');
+    if (surface) {
+      surface.className = 'lisse-surface';
+      surface.setAttribute('aria-hidden', 'true');
+      element.insertBefore(surface, element.firstChild);
+    }
+    const original = {
+      background: element.style.background,
+      borderColor: element.style.borderColor,
+      boxShadow: element.style.boxShadow,
+      backdropFilter: element.style.backdropFilter,
+      webkitBackdropFilter: element.style.getPropertyValue('-webkit-backdrop-filter'),
+    };
+    const restore = () => {
+      element.style.background = original.background;
+      element.style.borderColor = original.borderColor;
+      element.style.boxShadow = original.boxShadow;
+      element.style.backdropFilter = original.backdropFilter;
+      if (original.webkitBackdropFilter) element.style.setProperty('-webkit-backdrop-filter', original.webkitBackdropFilter);
+      else element.style.removeProperty('-webkit-backdrop-filter');
+    };
+    update = () => {
+      const { width, height } = element.getBoundingClientRect();
+      if (!width || !height) return;
+      const values = element.dataset.corner?.trim().split(/\s+/) ?? [];
+      const radius = (value: string | undefined) => value === 'round' ? Math.min(width, height) / 2 : Number(value ?? 0);
+      const smoothing = 0.6;
+      const path = values.length === 4
+        ? generateClipPath(width, height, {
+          topLeft: { radius: radius(values[0]), smoothing },
+          topRight: { radius: radius(values[1]), smoothing },
+          bottomRight: { radius: radius(values[2]), smoothing },
+          bottomLeft: { radius: radius(values[3]), smoothing },
+        })
+        : generateClipPath(width, height, { radius: radius(values[0]), smoothing });
+      restore();
+      const style = getComputedStyle(element);
+      if (direct) {
+        element.style.clipPath = path;
+        return;
+      }
+      if (!surface) return;
+      surface.style.inset = `${-parseFloat(style.borderTopWidth)}px ${-parseFloat(style.borderRightWidth)}px ${-parseFloat(style.borderBottomWidth)}px ${-parseFloat(style.borderLeftWidth)}px`;
+      surface.style.background = style.background;
+      surface.style.border = style.border;
+      surface.style.boxShadow = style.boxShadow;
+      surface.style.backdropFilter = style.backdropFilter;
+      surface.style.setProperty('-webkit-backdrop-filter', style.getPropertyValue('-webkit-backdrop-filter'));
+      surface.style.clipPath = path;
+      element.style.background = 'transparent';
+      element.style.borderColor = 'transparent';
+      element.style.boxShadow = 'none';
+      element.style.backdropFilter = 'none';
+      element.style.setProperty('-webkit-backdrop-filter', 'none');
+    };
+    if (!direct) {
+      const computedPosition = getComputedStyle(element).position;
+      if (computedPosition === 'static') element.style.position = 'relative';
+      element.style.isolation = 'isolate';
+    }
+    lisseCornerUpdates.set(element, update);
+    observeResize(element, update);
+  }
   update();
-  observeResize(element, update);
-});
+}
+function scanLisseCorners(node: Node) {
+  if (!(node instanceof HTMLElement)) return;
+  if (node.hasAttribute('data-corner')) applyLisseCorner(node);
+  node.querySelectorAll<HTMLElement>('[data-corner]').forEach(applyLisseCorner);
+}
+document.querySelectorAll<HTMLElement>('[data-corner]').forEach(applyLisseCorner);
+new MutationObserver((records) => {
+  for (const record of records) {
+    if (record.type === 'attributes') applyLisseCorner(record.target as HTMLElement);
+    else record.addedNodes.forEach(scanLisseCorners);
+  }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-corner', 'class', 'aria-checked'], childList: true, subtree: true });
 
 void initializeMap().catch((error) => {
   console.warn('Apple Maps unavailable; map was not loaded.', error);
