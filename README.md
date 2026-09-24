@@ -25,7 +25,7 @@ Live arrivals use opt-in browser location sharing while the tab is open. After r
 
 The route model uses the provided SSB coordinate (`34.05847, -117.81793`) and the existing The Current map pin (`34.0644634, -117.8036599`). It projects readings onto the segment between those stops, with a 400 m corridor and a provisional 1.3 road-distance factor for ETA ranges. This is a first-pass approximation, not a surveyed route trace. It needs calibration against real rides in both directions. Turnaround waits are modeled as 1–3 minutes at either endpoint. Service hours and breaks are not configured, so estimates appear only while rider updates are fresh; the app does not imply service is running when updates are absent.
 
-For production diagnostics, open the site with `?debug` to show the DialKit menu. Turn on **Record location** before a ride, tap **Got on** and **Got off** at the stops, then choose **Export tracking TXT**. Recording stays in that browser tab and does not enable location sharing; sharing still requires its separate opt-in. The export contains precise GPS readings, accuracy, route fit, tracking status, browser details, and boarding markers. Share only a short ride capture you are comfortable disclosing.
+For production diagnostics, open the site with `?debug` to show the DialKit menu. Turn on **Record location** before a ride, tap **Got on** and **Got off** at the stops, then choose **Export tracking TXT**. Recording stays in that browser tab and does not enable location sharing; sharing still requires its separate opt-in. The export contains precise GPS readings, accuracy, route fit, tracking status, browser details, and boarding markers. **Replay uploaded GPS ride** runs the captured relative route trace locally at 10× speed to exercise the ride detector without sending simulated reports to Cloudflare. Share only a short ride capture you are comfortable disclosing.
 
 The app remains mostly vanilla TypeScript; only the alert sheet uses a React island. Tapping one of its four service alert choices posts to `/api/alerts`; the Worker validates it and writes it to logs, without durable storage. The feedback sheet uses filled Apple SF Symbols exported as SVGs from [sfsymbols-svg](https://github.com/brendanballon/sfsymbols-svg); Apple licenses these symbols for developing applications on Apple-branded products. Silk 0.10.1 is publicly installable and its unlayered styles are bundled into `/build/main.css`. The sheet declares `license="non-commercial"` based on the app’s confirmed exclusively non-commercial use. Commercial use requires purchasing a [Silk commercial license](https://silkhq.com/terms) and changing that declaration. Location requires HTTPS or localhost.
 
@@ -38,11 +38,9 @@ bun run types
 bun run check
 bun run build
 bunx wrangler deploy --dry-run
-# When ready to publish:
-bun run deploy
 ```
 
-GitHub Actions deploys `main` to Cloudflare after each push. Add the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` under **Settings → Secrets and variables → Actions**. Create a Cloudflare API token with the **Edit Cloudflare Workers** permission, scoped to the account that hosts this Worker. The workflow runs the type check and deploy build before publishing. The Worker is configured to use `shuttle.calpoly.place` as a custom domain; Cloudflare must host the `calpoly.place` zone in that account.
+**Production releases go through GitHub Actions.** Push to `main`, or run the `Deploy to Cloudflare` workflow manually; it installs the locked dependencies, runs the type check, builds, and deploys/promotes the Worker on Cloudflare. Use that pipeline for production releases instead of running `bun run deploy` locally. Its credentials are the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` under **Settings → Secrets and variables → Actions**. The API token needs the **Edit Cloudflare Workers** permission, scoped to the account that hosts this Worker. The Worker uses `shuttle.calpoly.place` as a custom domain; Cloudflare must host the `calpoly.place` zone in that account.
 
 Bun handles packages and the browser build; Cloudflare's Workers runtime runs the server. SVG icon assets are stored in `public/assets` so they do not depend on expiring URLs. Apple system fonts are used when available, with Helvetica Neue as fallback.
 

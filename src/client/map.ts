@@ -4,7 +4,7 @@ let activeMap: mapkit.Map | undefined;
 let shuttleMarker: mapkit.Annotation | undefined;
 let shuttleMarkerElement: HTMLDivElement | undefined;
 let shuttleSignalAvailable = true;
-let userMarker: mapkit.MarkerAnnotation | undefined;
+let userMarker: mapkit.Annotation | undefined;
 let routeOverlays: mapkit.PolylineOverlay[][] = [];
 let routePaths: Point[][] = [];
 let displayedOverlays: mapkit.PolylineOverlay[] = [];
@@ -21,8 +21,17 @@ function syncUserMarker() {
   const coordinate = new mapkit.Coordinate(userLocation.latitude, userLocation.longitude);
   if (userMarker) userMarker.coordinate = coordinate;
   else {
-    userMarker = new mapkit.MarkerAnnotation(coordinate, {
-      title: 'Your location', color: '#3478f6', glyphText: '•', calloutEnabled: false,
+    userMarker = new mapkit.Annotation(coordinate, () => {
+      const dot = document.createElement('div');
+      Object.assign(dot.style, {
+        width: '20px', height: '20px', boxSizing: 'border-box',
+        border: '3px solid #fff', borderRadius: '50%', background: '#0a84ff',
+        boxShadow: '0 1px 4px rgba(40, 45, 52, 0.24)',
+      });
+      return dot;
+    }, {
+      title: 'Your location', accessibilityLabel: 'Your location', calloutEnabled: false,
+      size: { width: 20, height: 20 }, anchorOffset: new DOMPoint(0, 10),
     });
     activeMap.addAnnotation(userMarker);
   }
@@ -58,7 +67,9 @@ export function updateShuttleMarker(point: { latitude: number; longitude: number
       return marker;
     }, {
       title: 'Shuttle', accessibilityLabel: 'Shuttle', size: { width: 36, height: 36 },
-      anchorOffset: new DOMPoint(0, 18), calloutEnabled: false,
+      // MapKit offsets the element from its bottom-center anchor; a negative
+      // half-height moves that anchor to the center of this square marker.
+      anchorOffset: new DOMPoint(0, -18), calloutEnabled: false,
     });
     activeMap.addAnnotation(shuttleMarker);
   }

@@ -2,6 +2,7 @@ import { generateClipPath, observeResize } from '@lisse/core';
 import { createDialKit, createDialRoot } from 'dialkit/vanilla';
 import 'dialkit/vanilla/styles.css';
 import { initializeMap, selectRoute, updateShuttleMarker, updateUserLocation } from './map';
+import { uploadedRide, uploadedRideEvents } from './uploaded-ride';
 import { MAX_ACCURACY_METERS, ROUTE_WIDTH_METERS, distanceMeters, etaRange, getRoutePath, pointAtRouteProgress, routeLength, routePosition, scheduleFallback, stops, type Direction, type Point } from '../shuttle';
 import './alert-sheet';
 import './location-consent';
@@ -200,10 +201,14 @@ let debugSimulation: 'waiting' | 'waiting-current' | Direction | null = null;
 let resumeLocationAfterDebug = false;
 let debugProgress = 0.5;
 let debugPlaybackTimer: ReturnType<typeof setInterval> | undefined;
+let debugReplayTimer: ReturnType<typeof setTimeout> | undefined;
+let debugReplayMode = false;
+let debugReplayResumeSharing = false;
+let debugReplayPreviousEstimate: Estimate | null = null;
 type RecordedLocation = Point & {
   at: number; accuracy: number; altitude: number | null; heading: number | null; speed: number | null;
   routeProgress: number; crossTrackMeters: number; accuracyAccepted: boolean; corridorAccepted: boolean;
-  appStatus: string; appDirection: Direction | 'none'; liveSession: boolean;
+  appStatus: string; appDirection: Direction | 'none'; liveSession: boolean; sharingConsent: string; appWatchActive: boolean;
 };
 type TrackingMarker = { label: 'got on' | 'got off'; at: number; point?: Point; accuracy?: number; inferredDirection?: Direction };
 let debugRecording = false;
@@ -277,6 +282,8 @@ function setupLocationDebug() {
       waitingAtCurrent: { type: 'action', label: 'Wait at The Current' },
       toCurrent: { type: 'action', label: 'On route to The Current' },
       toSsb: { type: 'action', label: 'On route to Cal Poly Pomona' },
+      replayUploadedRide: { type: 'action', label: 'Replay uploaded GPS ride (10×)' },
+      stopReplay: { type: 'action', label: 'Stop GPS replay' },
       playPause: { type: 'action', label: 'Play or pause simulation' },
       useDeviceLocation: { type: 'action', label: 'Use device location' },
     },
@@ -308,11 +315,25 @@ function shapeDialkitSurfaces(root: HTMLElement) {
     const style = getComputedStyle(element);
     if (!parseFloat(style.borderTopLeftRadius)) return;
     if (style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.backgroundImage === 'none') return;
-    element.dataset.corner = style.borderTopLeftRadius.includes('%') ? 'round' : String(parseFloat(style.borderTopLeftRadius));
+    // Percentage corners can change meaning as DialKit expands its panel. Leave
+    // those responsive shapes to DialKit instead of freezing a collapsed circle
+    // into a Lisse pill for the full-height panel.
+    if (style.borderTopLeftRadius.includes('%')) return;
+    element.dataset.corner = String(parseFloat(style.borderTopLeftRadius));
   });
 }
 
 function handleDebugAction(action: string) {
+  if (action === 'simulation.replayUploadedRide') {
+    startUploadedRideReplay();
+    return;
+  }
+  if (action === 'simulation.stopReplay') {
+    finishUploadedRideReplay(false);
+    return;
+  }
+  if (debugReplayMode && action.startsWith('simulation.')) finishUploadedRideReplay(false);
+
   const simulation: Record<string, string> = {
     'simulation.waitingAtSsb': 'waiting',
     'simulation.waitingAtCurrent': 'waiting-current',
@@ -443,10 +464,90 @@ function handleDebugAction(action: string) {
   setDebugRecordingStatus(waiting ? 'Location simulation is waiting at a stop.' : 'Location simulation is ready.');
 }
 
+function startUploadedRideReplay() {
+  if (debugReplayMode) finishUploadedRideReplay(false);
+  debugReplayResumeSharing = locationWatch !== undefined || resumeLocationAfterDebug;
+  resumeLocationAfterDebug = false;
+  if (locationWatch !== undefined) navigator.geolocation?.clearWatch(locationWatch);
+  if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
+  locationWatch = undefined;
+  locationWaitTimer = undefined;
+  if (debugPlaybackTimer) clearInterval(debugPlaybackTimer);
+  debugPlaybackTimer = undefined;
+  if (sessionId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
+  debugSimulation = null;
+  sessionId = undefined;
+  rideDirection = undefined;
+  sessionActivityAt = 0;
+  latestReport = undefined;
+  readings = [];
+  debugReplayPreviousEstimate = lastEstimate;
+  debugReplayMode = true;
+  const replayStartedAt = Date.now();
+  let elapsedMs = 0;
+  let index = 0;
+  let eventIndex = 0;
+  setDebugRecordingStatus('Replaying the uploaded ride at 10× speed. Replay stays local and sends no reports.');
+
+  const step = () => {
+    const sample = uploadedRide[index];
+    if (!sample) {
+      finishUploadedRideReplay(true);
+      return;
+    }
+    elapsedMs += sample[0];
+    const point = pointAtRouteProgress(sample[1] / 100_000);
+    handleLocation({
+      timestamp: replayStartedAt + elapsedMs,
+      coords: {
+        latitude: point.latitude, longitude: point.longitude, accuracy: sample[2],
+        altitude: null, altitudeAccuracy: null, heading: null, speed: null,
+      },
+    } as GeolocationPosition);
+    while (eventIndex < uploadedRideEvents.length && elapsedMs >= uploadedRideEvents[eventIndex]!.at) {
+      setDebugRecordingStatus(`Replay marker: ${uploadedRideEvents[eventIndex]!.label}.`);
+      eventIndex++;
+    }
+    if (index % 10 === 0) {
+      setDebugRecordingStatus(`GPS replay · ${Math.round(index / uploadedRide.length * 100)}%${sessionId ? ` · ride detected ${rideDirection}` : ' · detecting movement'}.`);
+    }
+    index++;
+    debugReplayTimer = setTimeout(step, Math.max(1, (uploadedRide[index]?.[0] ?? 0) / 10));
+  };
+  step();
+}
+
+function finishUploadedRideReplay(completed: boolean) {
+  if (!debugReplayMode) return;
+  if (debugReplayTimer !== undefined) clearTimeout(debugReplayTimer);
+  debugReplayTimer = undefined;
+  debugReplayMode = false;
+  sessionId = undefined;
+  rideDirection = undefined;
+  sessionActivityAt = 0;
+  latestReport = undefined;
+  readings = [];
+  updateUserLocation(null);
+  renderEstimate(debugReplayPreviousEstimate);
+  debugReplayPreviousEstimate = null;
+  const resume = debugReplayResumeSharing;
+  debugReplayResumeSharing = false;
+  setDebugRecordingStatus(completed ? 'GPS replay finished. No tracking reports were sent.' : 'GPS replay stopped. No tracking reports were sent.');
+  if (resume) startSharing();
+}
+
 function setDebugRecordingStatus(message: string) {
   if (!debugRecordingStatus) return;
   debugRecordingStatus.textContent = message;
   debugRecordingStatus.hidden = false;
+}
+
+function getLocationSharingStatus() {
+  if (sessionId && rideDirection) return `live session active (${rideDirection})`;
+  if (locationWatch !== undefined) return 'location sharing is on; waiting for shuttle movement';
+  return localStorage.getItem('shuttle-location-consent') === 'allowed'
+    ? 'location sharing is allowed; app location watch is inactive'
+    : 'location sharing is off';
 }
 
 function startDebugLocationRecording() {
@@ -476,8 +577,10 @@ function startDebugLocationRecording() {
       routeProgress: route.progress, crossTrackMeters: route.crossTrackMeters,
       accuracyAccepted: accuracy <= MAX_ACCURACY_METERS,
       corridorAccepted: route.crossTrackMeters <= ROUTE_WIDTH_METERS && route.rawProgress >= -0.1 && route.rawProgress <= 1.1,
-      appStatus: sharingStatus?.textContent ?? 'unavailable',
+      appStatus: sharingStatus?.textContent ?? getLocationSharingStatus(),
       appDirection: rideDirection ?? 'none', liveSession: Boolean(sessionId),
+      sharingConsent: localStorage.getItem('shuttle-location-consent') ?? 'unset',
+      appWatchActive: locationWatch !== undefined,
     });
     setDebugRecordingStatus(`Recording on this device · ${recordedLocations.length} GPS readings.`);
   }, (error) => {
@@ -505,6 +608,8 @@ function exportTrackingLog() {
     `Page: ${location.origin}${location.pathname}`,
     `Browser: ${navigator.userAgent}`,
     `GPS readings: ${recordedLocations.length}`,
+    `Location sharing consent at export: ${localStorage.getItem('shuttle-location-consent') ?? 'unset'}`,
+    `App location watch active at export: ${locationWatch !== undefined}`,
     '',
     'EVENTS',
     ...trackingMarkers.map((marker) => [
@@ -514,12 +619,12 @@ function exportTrackingLog() {
     ].join('\n')),
     '',
     'GPS READINGS',
-    'timestamp,latitude,longitude,accuracy_m,altitude_m,heading_deg,speed_mps,route_progress,cross_track_m,accuracy_accepted,corridor_accepted,app_direction,live_session,app_status',
+    'timestamp,latitude,longitude,accuracy_m,altitude_m,heading_deg,speed_mps,route_progress,cross_track_m,accuracy_accepted,corridor_accepted,app_direction,live_session,sharing_consent,app_watch_active,app_status',
     ...recordedLocations.map((point) => [
       new Date(point.at).toISOString(), point.latitude, point.longitude, point.accuracy,
       point.altitude ?? '', point.heading ?? '', point.speed ?? '', point.routeProgress,
       point.crossTrackMeters, point.accuracyAccepted, point.corridorAccepted, point.appDirection,
-      point.liveSession, JSON.stringify(point.appStatus),
+      point.liveSession, point.sharingConsent, point.appWatchActive, JSON.stringify(point.appStatus),
     ].join(',')),
   ];
   const blob = new Blob([rows.join('\n')], { type: 'text/plain;charset=utf-8' });
@@ -539,6 +644,7 @@ function connectFeed() {
     if (latestReport && sessionId) sendReport(latestReport);
   });
   connection.addEventListener('message', ({ data }) => {
+    if (debugReplayMode) return;
     try {
       const message = JSON.parse(String(data)) as { type?: string; estimate?: Estimate | null };
       if (message.type === 'snapshot') renderEstimate(message.estimate ?? null);
@@ -562,8 +668,8 @@ function sendReport(reading: LocationReading) {
   sessionActivityAt = lastSentAt;
 }
 
-function stopSharing(status = 'Location sharing is off.') {
-  localStorage.setItem('shuttle-location-consent', 'declined');
+function stopSharing(status = 'Location sharing is off.', forgetConsent = true) {
+  if (forgetConsent) localStorage.setItem('shuttle-location-consent', 'declined');
   if (locationWatch !== undefined) navigator.geolocation?.clearWatch(locationWatch);
   if (locationWaitTimer !== undefined) clearTimeout(locationWaitTimer);
   if (permissionStatus) permissionStatus.onchange = null;
@@ -637,7 +743,7 @@ function handleLocation(position: GeolocationPosition) {
     speedMps: Math.max(0, Math.min(15, speed === null ? derivedSpeed : speed)),
   };
   readings.push(reading);
-  readings = readings.filter((item) => at - item.at < 90_000).slice(-8);
+  readings = readings.filter((item) => at - item.at < 90_000);
 
   if (sessionId && readings.length >= 3) {
     const recentStart = readings.at(-3);
@@ -659,10 +765,10 @@ function handleLocation(position: GeolocationPosition) {
     if (!first) return;
     const elapsed = at - first.at;
     const delta = reading.progress - first.progress;
-    const direction: Direction | null = delta > 0.08 ? 'to-current' : delta < -0.08 ? 'to-ssb' : null;
+    const direction: Direction | null = delta > 0.04 ? 'to-current' : delta < -0.04 ? 'to-ssb' : null;
     const beganAtStop = distanceToNearestStop(first) <= 250;
     const speedMps = distanceMeters(first, reading) / Math.max(1, elapsed / 1000);
-    if (beganAtStop && readings.length >= 4 && elapsed >= 15_000 && direction && speedMps >= 1.2 && speedMps <= 15) {
+    if (beganAtStop && readings.length >= 4 && elapsed >= 8_000 && direction && speedMps >= 1.2 && speedMps <= 15) {
       sessionId = crypto.randomUUID();
       rideDirection = direction;
       sessionActivityAt = Date.now();
@@ -670,8 +776,8 @@ function handleLocation(position: GeolocationPosition) {
       sharingStatus && (sharingStatus.textContent = 'Likely shuttle ride detected. Sharing the estimated shuttle position.');
       renderEstimate(lastEstimate);
       setDestination(direction === 'to-current' ? 0 : 1, true);
-      connectFeed();
       lastSentAt = 0;
+      if (!debugReplayMode) connectFeed();
     } else {
       sharingStatus && (sharingStatus.textContent = beganAtStop
         ? 'Waiting for sustained movement from a pickup point…'
@@ -681,7 +787,16 @@ function handleLocation(position: GeolocationPosition) {
 
   if (sessionId) {
     latestReport = reading;
-    sendReport(reading);
+    if (debugReplayMode && rideDirection) {
+      sessionActivityAt = Date.now();
+      renderEstimate({
+        ...point, direction: rideDirection, updatedAt: Date.now(), contributors: 1,
+        arrivals: {
+          ssb: etaRange(point, rideDirection, 'ssb', reading.speedMps),
+          current: etaRange(point, rideDirection, 'current', reading.speedMps),
+        },
+      });
+    } else sendReport(reading);
   }
 }
 
@@ -697,7 +812,7 @@ function startSharing() {
   readings = [];
   connectFeed();
   locationWatch = navigator.geolocation.watchPosition(handleLocation, (error) => {
-    if (error.code === error.PERMISSION_DENIED) stopSharing('Location permission was denied. You can still view shared ETAs.');
+    if (error.code === error.PERMISSION_DENIED) stopSharing('Location permission was denied. You can still view shared ETAs.', false);
     else if (sharingStatus) sharingStatus.textContent = 'Your device hasn’t provided a location yet. Check browser and device location settings.';
   }, { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 });
   window.dispatchEvent(new CustomEvent('shuttle-location-sharing-change', { detail: true }));
@@ -710,7 +825,7 @@ function startSharing() {
     const updatePermission = () => {
       if (locationWatch === undefined) return;
       if (status.state === 'denied') {
-        stopSharing('Location permission was denied. You can still view shared ETAs.');
+        stopSharing('Location permission was denied. You can still view shared ETAs.', false);
       } else if (status.state === 'prompt' && !hasLocationFix) {
         sharingStatus && (sharingStatus.textContent = 'Allow location in your browser prompt to continue.');
       } else if (!hasLocationFix) {
@@ -817,7 +932,10 @@ function scanLisseCorners(node: Node) {
 document.querySelectorAll<HTMLElement>('[data-corner]').forEach(applyLisseCorner);
 new MutationObserver((records) => {
   for (const record of records) {
-    if (record.type === 'attributes') applyLisseCorner(record.target as HTMLElement);
+    if (record.type === 'attributes') {
+      const element = record.target as HTMLElement;
+      if (element.hasAttribute('data-corner')) applyLisseCorner(element);
+    }
     else record.addedNodes.forEach(scanLisseCorners);
   }
 }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-corner', 'class', 'aria-checked'], childList: true, subtree: true });
